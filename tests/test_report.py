@@ -1,5 +1,7 @@
 """Unit tests for the pure report-building logic (report.py)."""
 
+from datetime import datetime, timezone
+
 from data_report_segmenter import report as report_lib
 from data_report_segmenter.report import VariableRef
 
@@ -221,3 +223,59 @@ def test_build_report_filename_empty_kind_falls_back():
 
 def test_format_timestamp_utc():
     assert report_lib.format_timestamp_utc(1767225600000) == "2026-01-01T00:00:00+00:00"
+
+
+# --- ms -> datetime (list_messages time bounds) ----------------------------
+#
+# pydoover's _to_snowflake passes ints through unchanged (treated as
+# snowflake message IDs); only datetimes are converted. All list_messages
+# TIME bounds must therefore go through ms_to_datetime.
+
+
+def test_ms_to_datetime_is_utc_aware():
+    dt = report_lib.ms_to_datetime(1767225600123)
+    assert dt.tzinfo is timezone.utc
+
+
+def test_ms_to_datetime_round_trip():
+    ms = 1767225600123
+    assert int(report_lib.ms_to_datetime(ms).timestamp() * 1000) == ms
+
+
+def test_ms_to_datetime_value():
+    assert report_lib.ms_to_datetime(1767225600000) == datetime(
+        2026, 1, 1, tzinfo=timezone.utc
+    )
+
+
+def test_ms_to_datetime_agrees_with_format_timestamp_utc():
+    ms = 1767225600000
+    assert (
+        report_lib.format_timestamp_utc(ms) == report_lib.ms_to_datetime(ms).isoformat()
+    )
+
+
+# --- pagination termination / cursor decision ------------------------------
+
+
+def test_next_page_cursor_empty_page_terminates():
+    assert report_lib.next_page_cursor([], None, 3) is None
+
+
+def test_next_page_cursor_short_page_terminates():
+    assert report_lib.next_page_cursor([30, 20], None, 3) is None
+
+
+def test_next_page_cursor_full_first_page_returns_oldest_id():
+    # First page is datetime-bounded (prev_cursor None); continue from the
+    # oldest returned snowflake ID.
+    assert report_lib.next_page_cursor([30, 20, 10], None, 3) == 10
+
+
+def test_next_page_cursor_full_later_page_advances():
+    assert report_lib.next_page_cursor([9, 8, 7], 10, 3) == 7
+
+
+def test_next_page_cursor_stuck_cursor_terminates():
+    # No progress: the oldest ID equals the cursor this page was fetched with.
+    assert report_lib.next_page_cursor([30, 20, 10], 10, 3) is None

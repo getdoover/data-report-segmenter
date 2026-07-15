@@ -132,10 +132,46 @@ def extract_row_values(
     return values
 
 
+def ms_to_datetime(epoch_ms: int) -> datetime:
+    """Timezone-aware UTC datetime for an epoch-ms timestamp.
+
+    TIME bounds passed to ``list_messages`` MUST be datetimes: pydoover's
+    ``_to_snowflake`` (api/data/_base.py) converts only ``datetime`` values
+    via ``generate_snowflake_id_at`` and passes ints through UNCHANGED —
+    an int is treated as an already-formed snowflake message ID, so an
+    epoch-ms int (~1.8e12, vs real snowflakes ~2e17) silently selects an
+    empty window near the Doover epoch.
+    """
+    return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
+
+
 def format_timestamp_utc(epoch_ms: int) -> str:
     """ISO-8601 UTC string for an epoch-ms timestamp."""
-    dt = datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
-    return dt.isoformat()
+    return ms_to_datetime(epoch_ms).isoformat()
+
+
+def next_page_cursor(
+    message_ids: list[int], prev_cursor: int | None, page_limit: int
+) -> int | None:
+    """Backward-paging termination / next-cursor decision.
+
+    ``message_ids`` are the snowflake message IDs returned for the current
+    page; ``prev_cursor`` is the int snowflake cursor this page was fetched
+    with (None on the first page, whose ``before`` bound is a datetime).
+
+    Returns the int snowflake ID to pass as the next ``before=`` cursor
+    (genuine message IDs ARE ints to ``list_messages``), or None when paging
+    is complete: an empty or short page means the range is exhausted, and an
+    unchanged cursor means no progress (guards against re-fetch loops). The
+    int-vs-datetime asymmetry of the first page never reaches the equality
+    check because ``prev_cursor`` is None there.
+    """
+    if not message_ids or len(message_ids) < page_limit:
+        return None
+    oldest = min(message_ids)
+    if prev_cursor is not None and oldest == prev_cursor:
+        return None
+    return oldest
 
 
 def render_csv(var_refs: list[VariableRef], rows: list[dict]) -> bytes:

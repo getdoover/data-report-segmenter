@@ -140,6 +140,10 @@ class DataReportSegmenterApp(Application):
         author_id = getattr(ctx.message, "author_id", None)
         if author_id is not None:
             closed["author_id"] = author_id
+        # NB two int-time conventions that look identical at call sites:
+        # create_message(timestamp=) takes an epoch-MS int (the API sends it
+        # as `ts`), whereas list_messages(before=/after=) treats an int as a
+        # SNOWFLAKE message ID - time bounds there must be datetimes.
         await self.api.create_message(TAG_VALUES_CHANNEL, closed, timestamp=switch_ts)
 
         # Open the new segment (aggregate pointer).
@@ -281,16 +285,25 @@ class DataReportSegmenterApp(Application):
             chunk *= _CROSS_SCAN_GROWTH
         return None
 
-    async def _page_segment_records(self, after_ts, before_ts) -> list[dict]:
-        """All ``record_type == "segment"`` messages in (after_ts, before_ts]."""
+    async def _page_segment_records(self, after_ts: int, before_ts: int) -> list[dict]:
+        """All ``record_type == "segment"`` messages in (after_ts, before_ts].
+
+        ``after_ts``/``before_ts`` are epoch-ms ints; they are converted to
+        aware datetimes for ``list_messages`` because its ``before``/``after``
+        treat ints as snowflake message IDs (see report.ms_to_datetime).
+        Subsequent-page cursors ARE genuine int snowflake IDs and stay ints.
+        """
+        after_dt = report_lib.ms_to_datetime(after_ts)
         segments: list[dict] = []
         seen: set[int] = set()
-        before_cursor: int | None = before_ts
+        # First page bounded by time (datetime); later pages by int snowflake.
+        before_bound: datetime | int = report_lib.ms_to_datetime(before_ts)
+        cursor_id: int | None = None
         while True:
             msgs = await self.api.list_messages(
                 TAG_VALUES_CHANNEL,
-                before=before_cursor,
-                after=after_ts,
+                before=before_bound,
+                after=after_dt,
                 limit=_PAGE_LIMIT,
                 field_names=["record_type", "kind", "start_ts", "end_ts"],
             )
@@ -303,22 +316,33 @@ class DataReportSegmenterApp(Application):
                 data = m.data or {}
                 if data.get("record_type") == "segment":
                     segments.append(data)
-            oldest = min(m.id for m in msgs)
-            if oldest == before_cursor or len(msgs) < _PAGE_LIMIT:
+            cursor_id = report_lib.next_page_cursor(
+                [m.id for m in msgs], cursor_id, _PAGE_LIMIT
+            )
+            if cursor_id is None:
                 break
-            before_cursor = oldest
+            before_bound = cursor_id
         return segments
 
     async def _collect_window_rows(
-        self, win_start, win_end, kind, var_refs, field_names
+        self, win_start: int, win_end: int, kind, var_refs, field_names
     ) -> list[dict]:
+        """ui_state rows in the window (win_start, win_end], epoch-ms bounds.
+
+        Same time-vs-snowflake convention as _page_segment_records: the
+        window bounds are epoch-ms ints converted to datetimes for
+        ``list_messages``; subsequent-page cursors are int snowflake IDs.
+        """
+        after_dt = report_lib.ms_to_datetime(win_start)
         rows_by_id: dict[int, dict] = {}
-        before_cursor: int | None = win_end
+        # First page bounded by time (datetime); later pages by int snowflake.
+        before_bound: datetime | int = report_lib.ms_to_datetime(win_end)
+        cursor_id: int | None = None
         while True:
             msgs = await self.api.list_messages(
                 UI_STATE_CHANNEL,
-                before=before_cursor,
-                after=win_start,
+                before=before_bound,
+                after=after_dt,
                 limit=_PAGE_LIMIT,
                 field_names=field_names,
             )
@@ -333,10 +357,12 @@ class DataReportSegmenterApp(Application):
                     "segment_kind": kind,
                     "values": values,
                 }
-            oldest = min(m.id for m in msgs)
-            if oldest == before_cursor or len(msgs) < _PAGE_LIMIT:
+            cursor_id = report_lib.next_page_cursor(
+                [m.id for m in msgs], cursor_id, _PAGE_LIMIT
+            )
+            if cursor_id is None:
                 break
-            before_cursor = oldest
+            before_bound = cursor_id
         return list(rows_by_id.values())
 
 
