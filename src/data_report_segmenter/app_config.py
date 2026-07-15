@@ -41,10 +41,13 @@ class DataReportSegmenterConfig(config.Schema):
     )
 
     # --- processor plumbing ---------------------------------------------
-    # dv_proc_subscriptions MUST include "dv-rpc" in every install's
-    # deployment config or no RPC (switch_segment / generate_report) ever
-    # fires. See README + simulators/deployment_config.json.
-    subscriptions = ManySubscriptionConfig()
+    # dv_proc_subscriptions MUST include "dv-rpc" or no RPC (switch_segment /
+    # generate_report) ever reaches the processor: the widget posts both RPCs
+    # on the dv-rpc channel (doover-js useSendRpc), so the processor only wakes
+    # for them if subscribed to it. Defaulted here so every fresh install is
+    # wired correctly out of the box; do not remove "dv-rpc". The app uses no
+    # other channel subscription (ui_state / tag_values are read on demand).
+    subscriptions = ManySubscriptionConfig(default=["dv-rpc"])
     # dv_proc_schedules / dv_proc_timezone: reserved for future scheduled
     # reports; present now, unused in v1.
     schedules = ScheduleConfig()

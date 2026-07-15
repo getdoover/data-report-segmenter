@@ -17,7 +17,9 @@
             "MemorySize": 256,
             "Handler": "src.data_report_segmenter.handler"
         },
-        "staging_config": {},
+        "staging_config": {
+            "id": 202988397197834758
+        },
         "image_name": null,
         "build_widget_command": "npm --prefix widget run build",
         "widget": "widget/assets/DataReportSegmenterWidget.js",
@@ -77,9 +79,15 @@
                     "title": "Subscription",
                     "x-name": "dv_proc_subscriptions",
                     "x-hidden": false,
-                    "type": "array",
-                    "x-required": true,
+                    "type": [
+                        "array",
+                        "null"
+                    ],
+                    "x-required": false,
                     "description": "A list of channels to subscribe to.",
+                    "default": [
+                        "dv-rpc"
+                    ],
                     "x-position": 3,
                     "items": {
                         "title": "Channel Subscription",
@@ -717,7 +725,6 @@
             },
             "additionalElements": true,
             "required": [
-                "dv_proc_subscriptions",
                 "dv_proc_schedules"
             ]
         },
@@ -745,6 +752,20 @@
                     "app_key": "$config.app().APP_KEY"
                 }
             }
-        }
+        },
+        "organisation_id": null,
+        "container_registry_profile_id": null,
+        "id": null,
+        "key": null,
+        "owner_org_id": null,
+        "code_repo_id": null,
+        "build_args": null,
+        "icon_url": null,
+        "banner_url": null,
+        "export_config_command": null,
+        "export_ui_command": null,
+        "generate_ui": true,
+        "run_command": null,
+        "lambda_arn": null
     }
 }
