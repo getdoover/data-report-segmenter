@@ -1,0 +1,11 @@
+{
+    "_comment": "Sample deployment_config for a data_report_segmenter install. Keys are the sanitised config display-names. IMPORTANT: dv_proc_subscriptions MUST include 'dv-rpc' or the widget's switch_segment / generate_report RPCs never reach the processor (see README). dv_proc_schedules is required by the schema but unused in v1 — 'disabled' is fine.",
+
+    "dv_proc_subscriptions": ["dv-rpc"],
+    "dv_proc_schedules": "disabled",
+    "dv_proc_timezone": "Australia/Brisbane",
+
+    "segment_kinds": ["Pipeline A", "Pipeline B", "Maintenance"],
+    "show_none_segment": true,
+    "segments_label": "Segment"
+}
