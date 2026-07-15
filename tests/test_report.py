@@ -6,11 +6,14 @@ from data_report_segmenter import report as report_lib
 from data_report_segmenter.report import VariableRef
 
 
-# A realistic ui_state aggregate (crib shape from data-plane.md §3):
+# A realistic ui_state aggregate: NumericVariables carry their value as a
+# $tag reference (never the literal), which is the location in tag_values the
+# report follows to read value history.
 #   {"state": {"children": {<app_key>: {"children": {<var>: {...}}}}}}
 # - "flow_sensor_1" has a top-level numeric var + a nested submodule var
-# - "level_sensor_1" has an integer var and a text (non-numeric) var and a
-#   currentValue that is an unresolved "$"-tag reference (live tag ref)
+#   (app() resolves to the owning app even inside the submodule)
+# - "level_sensor_1" has an integer var, a text (non-numeric) var, and a var
+#   whose currentValue is a LITERAL (no $tag ref -> nothing to follow -> skip)
 # - "data_report_segmenter_1" is our OWN subtree and must be excluded
 UI_STATE = {
     "state": {
@@ -21,7 +24,7 @@ UI_STATE = {
                     "flow_rate": {
                         "type": "uiVariable",
                         "varType": "float",
-                        "currentValue": 12.5,
+                        "currentValue": "$tag.app().value:number:null",
                     },
                     "pump_block": {
                         "type": "uiSubmodule",
@@ -29,7 +32,7 @@ UI_STATE = {
                             "pressure": {
                                 "type": "uiVariable",
                                 "varType": "float",
-                                "currentValue": 3.2,
+                                "currentValue": "$tag.app().pressure:number:0",
                             }
                         },
                     },
@@ -41,17 +44,17 @@ UI_STATE = {
                     "level_count": {
                         "type": "uiVariable",
                         "varType": "integer",
-                        "currentValue": 7,
+                        "currentValue": "$tag.app().count:number:0",
                     },
                     "status_text": {
                         "type": "uiVariable",
                         "varType": "text",
-                        "currentValue": "OK",
+                        "currentValue": "$tag.app().status:string:OK",
                     },
-                    "bound_value": {
+                    "literal_value": {
                         "type": "uiVariable",
                         "varType": "float",
-                        "currentValue": "$level_sensor_1.raw",
+                        "currentValue": 42.0,
                     },
                 },
             },
@@ -61,12 +64,19 @@ UI_STATE = {
                     "current_kind": {
                         "type": "uiVariable",
                         "varType": "float",
-                        "currentValue": 1.0,
+                        "currentValue": "$tag.app().current:number:0",
                     }
                 },
             },
         }
     }
+}
+
+
+# A tag_values message (per-change diff) carrying the referenced tags.
+TAG_MSG = {
+    "flow_sensor_1": {"value": 12.5, "pressure": 3.2},
+    "level_sensor_1": {"count": 7},
 }
 
 
@@ -76,11 +86,11 @@ UI_STATE = {
 def test_walk_collects_numeric_vars_including_submodule():
     refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
     cols = [r.column for r in refs]
-    # float + integer vars, including the nested submodule var; sorted by column
+    # float + integer vars with a $tag ref, including the nested submodule
+    # var; sorted by column. Literal-valued and text vars are excluded.
     assert cols == [
         "flow_sensor_1.flow_rate",
         "flow_sensor_1.pump_block.pressure",
-        "level_sensor_1.bound_value",
         "level_sensor_1.level_count",
     ]
 
@@ -95,13 +105,20 @@ def test_walk_excludes_text_vars():
     assert "level_sensor_1.status_text" not in [r.column for r in refs]
 
 
-def test_walk_field_paths():
+def test_walk_resolves_tag_paths():
     refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
-    by_col = {r.column: r.field_path for r in refs}
-    assert (
-        by_col["flow_sensor_1.pump_block.pressure"]
-        == "state.children.flow_sensor_1.children.pump_block.children.pressure.currentValue"
-    )
+    by_col = {r.column: r.path for r in refs}
+    # app() resolved to the owning app, even inside the submodule.
+    assert by_col["flow_sensor_1.flow_rate"] == ("flow_sensor_1", "value")
+    assert by_col["flow_sensor_1.pump_block.pressure"] == ("flow_sensor_1", "pressure")
+    assert by_col["level_sensor_1.level_count"] == ("level_sensor_1", "count")
+
+
+def test_walk_skips_literal_currentvalue():
+    # A numeric var whose currentValue is a literal (not a $tag ref) has no
+    # tag history to follow -> excluded (tag-reference-native).
+    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    assert "level_sensor_1.literal_value" not in [r.column for r in refs]
 
 
 def test_walk_empty_state():
@@ -109,15 +126,46 @@ def test_walk_empty_state():
     assert report_lib.walk_numeric_variables({"state": {}}, "x") == []
 
 
+# --- tag reference resolution --------------------------------------------
+
+
+def test_parse_tag_ref_app_macro():
+    assert report_lib.parse_tag_ref(
+        "$tag.app().value:number:null", "flow_sensor_1"
+    ) == ("flow_sensor_1", "value")
+
+
+def test_parse_tag_ref_no_type_or_default():
+    assert report_lib.parse_tag_ref("$tag.app().value", "a") == ("a", "value")
+
+
+def test_parse_tag_ref_dotted_path_and_no_app_macro():
+    assert report_lib.parse_tag_ref("$tag.app().a.b:number:0", "x") == ("x", "a", "b")
+    assert report_lib.parse_tag_ref("$tag.other.field:number:0", "x") == (
+        "other",
+        "field",
+    )
+
+
+def test_parse_tag_ref_non_references():
+    assert report_lib.parse_tag_ref(42.0, "x") is None
+    assert report_lib.parse_tag_ref("plain string", "x") is None
+    assert report_lib.parse_tag_ref(None, "x") is None
+
+
 # --- value extraction ----------------------------------------------------
 
 
-def test_get_by_path():
+def test_get_by_keys():
     assert (
-        report_lib.get_by_path(UI_STATE, "state.children.flow_sensor_1")
-        is UI_STATE["state"]["children"]["flow_sensor_1"]
+        report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1",))
+        is TAG_MSG["flow_sensor_1"]
     )
-    assert report_lib.get_by_path(UI_STATE, "state.nope.here") is None
+    assert report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1", "value")) == 12.5
+    assert report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1", "nope")) is None
+    assert report_lib.get_by_keys(TAG_MSG, ("nope", "value")) is None
+    # non-dict traversal is safe
+    assert report_lib.get_by_keys({"a": 5}, ("a", "b")) is None
 
 
 def test_is_numeric():
@@ -128,10 +176,9 @@ def test_is_numeric():
     assert not report_lib.is_numeric(None)
 
 
-def test_extract_row_values_keeps_only_numerics():
+def test_extract_row_values_from_tag_message():
     refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
-    values = report_lib.extract_row_values(UI_STATE, refs)
-    # bound_value is a "$"-tag reference (non-numeric) -> dropped (TODO-verify)
+    values = report_lib.extract_row_values(TAG_MSG, refs)
     assert values == {
         "flow_sensor_1.flow_rate": 12.5,
         "flow_sensor_1.pump_block.pressure": 3.2,
@@ -139,16 +186,24 @@ def test_extract_row_values_keeps_only_numerics():
     }
 
 
+def test_extract_row_values_diff_message_partial():
+    # tag_values messages are per-change diffs: a message with only one app's
+    # tags yields only that app's columns; the rest are absent (blank cells).
+    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    values = report_lib.extract_row_values({"level_sensor_1": {"count": 9}}, refs)
+    assert values == {"level_sensor_1.level_count": 9}
+
+
 def test_extract_row_values_missing_message_fields():
-    refs = [VariableRef("a.b", "state.children.a.children.b.currentValue")]
-    assert report_lib.extract_row_values({"state": {"children": {}}}, refs) == {}
+    refs = [VariableRef("a.b", ("a", "b"))]
+    assert report_lib.extract_row_values({"other": {"x": 1}}, refs) == {}
 
 
 # --- CSV assembly --------------------------------------------------------
 
 
 def _refs(*cols):
-    return [VariableRef(c, f"state.children.{c}.currentValue") for c in cols]
+    return [VariableRef(c, ("app", c)) for c in cols]
 
 
 def test_render_csv_header_and_ordering():

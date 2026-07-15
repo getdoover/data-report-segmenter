@@ -243,15 +243,20 @@ class DataReportSegmenterApp(Application):
         closed_segments = await self._fetch_closed_segments(start_ts, end_ts)
         windows = seg.compute_windows(closed_segments, current, kind, start_ts, end_ts)
 
+        # ui_state tells us WHICH numeric variables to report; each carries a
+        # $tag reference that walk_numeric_variables resolves to the
+        # tag_values location holding the actual value history.
         ui_state = await self.api.fetch_channel_aggregate(UI_STATE_CHANNEL)
         var_refs = report_lib.walk_numeric_variables(ui_state.data or {}, self.app_key)
-        field_names = [ref.field_path for ref in var_refs]
+        # tag_values messages are keyed by app_key at the top level; restrict
+        # history reads to the app_keys our variables actually live under.
+        source_app_keys = sorted({ref.path[0] for ref in var_refs if ref.path})
 
         rows: list[dict] = []
         for win_start, win_end in windows:
             rows.extend(
                 await self._collect_window_rows(
-                    win_start, win_end, kind, var_refs, field_names
+                    win_start, win_end, kind, var_refs, source_app_keys
                 )
             )
         return windows, rows, var_refs
@@ -341,11 +346,14 @@ class DataReportSegmenterApp(Application):
     async def _collect_window_rows(
         self, win_start: int, win_end: int, kind, var_refs, field_names
     ) -> list[dict]:
-        """ui_state rows in the window (win_start, win_end], epoch-ms bounds.
+        """tag_values value rows in the window (win_start, win_end], epoch-ms.
 
-        Same time-vs-snowflake convention as _page_segment_records: the
-        window bounds are epoch-ms ints converted to datetimes for
-        ``list_messages``; subsequent-page cursors are int snowflake IDs.
+        Reads the tag_values value history the ui_state variables reference.
+        Same time-vs-snowflake convention as _page_segment_records: window
+        bounds are epoch-ms ints converted to datetimes for ``list_messages``;
+        subsequent-page cursors are int snowflake IDs. Messages that carry
+        none of our variables (segment records, unrelated apps' tags) yield no
+        row.
         """
         after_dt = report_lib.ms_to_datetime(win_start)
         rows_by_id: dict[int, dict] = {}
@@ -354,7 +362,7 @@ class DataReportSegmenterApp(Application):
         cursor_id: int | None = None
         while True:
             msgs = await self.api.list_messages(
-                UI_STATE_CHANNEL,
+                TAG_VALUES_CHANNEL,
                 before=before_bound,
                 after=after_dt,
                 limit=_PAGE_LIMIT,
@@ -366,6 +374,8 @@ class DataReportSegmenterApp(Application):
                 if m.id in rows_by_id:
                     continue
                 values = report_lib.extract_row_values(m.data or {}, var_refs)
+                if not values:
+                    continue  # diff message with none of our tags -> no row
                 rows_by_id[m.id] = {
                     "timestamp_utc": report_lib.format_timestamp_utc(_snowflake_ms(m)),
                     "segment_kind": kind,

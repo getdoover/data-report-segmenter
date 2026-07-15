@@ -1,8 +1,10 @@
 """Pure report-building logic: variable-tree walk, value extraction, CSV.
 
-No pydoover / IO dependencies. The processor fetches the ui_state aggregate
-and ui_state history messages; everything here operates on the plain dicts
-those return so it can be unit-tested without a client.
+No pydoover / IO dependencies. The app is tag-reference-native: it reads the
+ui_state aggregate to discover WHICH numeric variables exist, follows each
+one's ``$tag`` reference to a location in tag_values, then reads the actual
+value history from tag_values messages. Everything here operates on the plain
+dicts the client returns so it can be unit-tested without a client.
 """
 
 from __future__ import annotations
@@ -14,42 +16,75 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 
 NUMERIC_VAR_TYPES = ("float", "integer")
+_TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
 
 
 class VariableRef(NamedTuple):
-    """A NumericVariable discovered in the ui_state tree.
+    """A NumericVariable discovered in ui_state, resolved to its tag source.
 
     - ``column`` is the CSV header for this variable: ``<app_key>.<var...>``.
-    - ``field_path`` is the dotted path (rooted at ``state``) at which the
-      value lives in both the ui_state aggregate and each ui_state message,
-      e.g. ``state.children.<app_key>.children.<var>.currentValue``.
+    - ``path`` is the key path into a ``tag_values`` message/aggregate where
+      the value actually lives, e.g. ``("4_20ma_sensor_1", "value")``.
+      ui_state carries only the *reference* ($tag...) to this location, never
+      the value history — so the report reads history from tag_values here.
     """
 
     column: str
-    field_path: str
+    path: tuple[str, ...]
+
+
+def parse_tag_ref(ref, context_app_key: str) -> tuple[str, ...] | None:
+    """Resolve a ``$tag`` lookup string to a key path into ``tag_values``.
+
+    ui_state NumericVariables carry their value as a tag reference in the
+    compact lookup format (customer-site TAG_VALUE_LOOKUPS):
+
+        ``$tag.<json_path>[:<type>[:<default>]]``
+
+    e.g. ``$tag.app().value:number:null``. ``app()`` resolves to the owning
+    application key (``context_app_key``); the remaining dotted path indexes
+    into that app's tag_values block. A JSONPath never contains ``:``, so the
+    optional ``:type``/``:default`` suffix is everything after the first
+    ``:`` and is discarded — the report keeps genuinely-numeric values only,
+    so coercion/defaulting is unnecessary. Returns the resolved key tuple
+    (e.g. ``("4_20ma_sensor_1", "value")``), or ``None`` if ``ref`` is not a
+    ``$tag`` reference.
+    """
+    if not isinstance(ref, str) or not ref.startswith("$tag."):
+        return None
+    body = ref[len("$tag.") :]
+    path_str = body.split(":", 1)[0]  # json path is everything before ':'
+    segments = [
+        context_app_key if seg == "app()" else seg
+        for seg in path_str.split(".")
+        if seg != ""
+    ]
+    return tuple(segments) or None
 
 
 def _walk_children(
     children: dict,
     column_prefix: str,
-    path_prefix: str,
+    context_app_key: str,
     out: list[VariableRef],
 ) -> None:
     for name, node in children.items():
         if not isinstance(node, dict):
             continue
         column = f"{column_prefix}.{name}"
-        node_path = f"{path_prefix}.children.{name}"
         node_type = node.get("type")
         var_type = node.get("varType")
         if node_type == "uiVariable" and var_type in NUMERIC_VAR_TYPES:
-            out.append(
-                VariableRef(column=column, field_path=f"{node_path}.currentValue")
-            )
-        # Recurse into submodules / containers regardless of this node's type.
+            # ui_state holds only the tag *reference*; resolve it to the
+            # tag_values location that actually carries the value history.
+            path = parse_tag_ref(node.get("currentValue"), context_app_key)
+            if path is not None:
+                out.append(VariableRef(column=column, path=path))
+        # Recurse into submodules / containers regardless of this node's type;
+        # app() still resolves to the owning application, so context is stable.
         grandchildren = node.get("children")
         if isinstance(grandchildren, dict) and grandchildren:
-            _walk_children(grandchildren, column, node_path, out)
+            _walk_children(grandchildren, column, context_app_key, out)
 
 
 def walk_numeric_variables(
@@ -81,7 +116,7 @@ def walk_numeric_variables(
         _walk_children(
             children,
             column_prefix=app_key,
-            path_prefix=f"state.children.{app_key}",
+            context_app_key=app_key,
             out=out,
         )
 
@@ -90,13 +125,13 @@ def walk_numeric_variables(
     return out
 
 
-def get_by_path(data: dict, dotted_path: str):
-    """Navigate a dotted path through nested dicts. Returns None if absent."""
+def get_by_keys(data: dict, keys: tuple[str, ...]):
+    """Navigate a sequence of keys through nested dicts. None if absent."""
     node = data
-    for part in dotted_path.split("."):
-        if not isinstance(node, dict) or part not in node:
+    for key in keys:
+        if not isinstance(node, dict) or key not in node:
             return None
-        node = node[part]
+        node = node[key]
     return node
 
 
@@ -110,23 +145,17 @@ def is_numeric(value) -> bool:
 def extract_row_values(
     message_data: dict, var_refs: list[VariableRef]
 ) -> dict[str, float]:
-    """Extract the numeric currentValue of each variable from one ui_state message.
+    """Extract each variable's numeric value from one tag_values message.
 
-    Only genuinely-numeric values are kept; a variable whose value is absent
-    or a non-numeric string (e.g. an unresolved ``$``-tag reference) is left
-    out of the row so its cell renders blank.
-
-    TODO-verify (see PLAN "Report semantics" / data-plane.md §3): some apps
-    publish ``currentValue`` as a *live tag reference* string rather than a
-    literal number. When that is detected for a variable across a report, the
-    verification phase should add a fallback that sources that variable's
-    history from ``tag_values`` messages (``<app_key>.<tag>``) instead of
-    ui_state. This function keeps only literal numerics; the fallback is not
-    yet wired.
+    ``message_data`` is a tag_values message payload (``{app_key: {tag:
+    value}}``). tag_values messages are per-change diffs, so a message
+    typically carries only the tags that moved — variables absent from this
+    message are simply left out of the row (their cell renders blank). Only
+    genuinely-numeric values are kept.
     """
     values: dict[str, float] = {}
     for ref in var_refs:
-        raw = get_by_path(message_data, ref.field_path)
+        raw = get_by_keys(message_data, ref.path)
         if is_numeric(raw):
             values[ref.column] = raw
     return values
