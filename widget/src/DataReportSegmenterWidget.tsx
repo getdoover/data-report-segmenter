@@ -3,22 +3,19 @@ import { useEffect, useMemo, useState } from "react";
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import { useRemoteParams } from "customer_site/useRemoteParams";
 
-import { useAgentChannel, useChannelMessages } from "doover-js/react";
+import { useAgentChannel } from "doover-js/react";
 
 import { extractAppConfig, extractCurrentSegment } from "./lib/config.ts";
 import {
   deriveReportOptions,
   deriveSegmentOptions,
 } from "./lib/options.ts";
-import { sortReportsDesc, type ReportMessage } from "./lib/reports.ts";
+import { sortReportsDesc } from "./lib/reports.ts";
 import { resolveTheme } from "./lib/theme.ts";
-import {
-  DEFAULT_APP_KEY,
-  REPORTS_CHANNEL,
-  type ReportRecord,
-} from "./lib/types.ts";
+import { DEFAULT_APP_KEY } from "./lib/types.ts";
 import { useSwitchSegment } from "./hooks/useSwitchSegment.ts";
 import { useGenerateReport } from "./hooks/useGenerateReport.ts";
+import { useReportsWatch } from "./hooks/useReportsWatch.ts";
 import { SegmentHeader } from "./components/SegmentHeader.tsx";
 import { GenerateReportPanel } from "./components/GenerateReportPanel.tsx";
 import { ReportList } from "./components/ReportList.tsx";
@@ -95,10 +92,10 @@ function DataReportSegmenterInner({
     "deployment_config",
   );
   const { data: tagValues } = useAgentChannel(agentId, "tag_values");
-  const { messages: reportMessages } = useChannelMessages<ReportRecord>(
-    { agentId, channelName: REPORTS_CHANNEL },
-    { limit: 25, liveUpdates: true },
-  );
+  // Update-aware watch: useChannelMessages alone drops MessageUpdate events,
+  // which is how job messages flip Generating -> Complete/Failed. See
+  // hooks/useReportsWatch.ts.
+  const { messages, refetch } = useReportsWatch(agentId);
 
   const config = useMemo(
     () => extractAppConfig(deploymentConfig, appKey),
@@ -118,11 +115,10 @@ function DataReportSegmenterInner({
     [config.segmentKinds, current.kind],
   );
 
-  const messages = reportMessages as ReportMessage[];
   const recentReports = useMemo(() => sortReportsDesc(messages), [messages]);
 
   const switcher = useSwitchSegment(agentId, appKey, current.kind);
-  const reporter = useGenerateReport(agentId, appKey, messages);
+  const reporter = useGenerateReport(agentId, appKey, messages, refetch);
 
   const [showReport, setShowReport] = useState(false);
   const now = Date.now();

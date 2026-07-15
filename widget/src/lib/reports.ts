@@ -37,6 +37,77 @@ export function isReportMessage(msg: ReportMessage): boolean {
   return msg?.data?.record_type === "report";
 }
 
+/** True when the report has reached a terminal lifecycle state. */
+export function isTerminalReport(msg: ReportMessage): boolean {
+  const status = classifyReport(msg);
+  return status === "Complete" || status === "Failed";
+}
+
+/**
+ * Live-update overlay: the latest gateway MessageCreate/MessageUpdate event
+ * per message id, maintained by the widget's channel subscription.
+ *
+ * Needed because doover-js `useChannelMessages` subscribes with only
+ * `{ onMessage }` — MessageUpdate events are dropped and the query is
+ * staleTime-Infinity, so the processor's status flip
+ * (Generating -> Complete/Failed via update_message) never reaches the list.
+ */
+export type ReportOverlay = Record<string, ReportMessage>;
+
+/**
+ * Merge a live-updated message over its base-list counterpart.
+ *
+ * Payload choice: a TERMINAL side wins (a stale "Generating" create event must
+ * never mask a refetched "Complete", and vice versa a live "Complete" update
+ * must beat a stale REST page); on a tie the update (newer event) wins.
+ * Attachments: the chosen side's, unless empty and the other side has some
+ * (a MessageUpdate event may not carry the CSV attachment the REST refetch
+ * does — never lose it).
+ */
+export function mergeReportMessage(
+  base: ReportMessage,
+  update: ReportMessage,
+): ReportMessage {
+  const chooseUpdate = isTerminalReport(update) || !isTerminalReport(base);
+  const chosen = chooseUpdate ? update : base;
+  const other = chooseUpdate ? base : update;
+  const attachments =
+    chosen.attachments && chosen.attachments.length > 0
+      ? chosen.attachments
+      : other.attachments ?? [];
+  return { ...chosen, attachments };
+}
+
+/**
+ * Apply the overlay to the base message list (id-keyed):
+ *  - an overlay entry matching a base message REPLACES it (mergeReportMessage
+ *    semantics: data + attachments, terminal-wins);
+ *  - an overlay entry with an UNKNOWN id is APPENDED — a create event that
+ *    raced (or was dropped before) the REST seed must still surface.
+ * Order of the base list is preserved; consumers sort/filter downstream.
+ */
+export function applyMessageOverlay(
+  messages: ReportMessage[],
+  overlay: ReportOverlay,
+): ReportMessage[] {
+  const ids = Object.keys(overlay);
+  if (ids.length === 0) {
+    return messages;
+  }
+  const seen = new Set<string>();
+  const out = messages.map((msg) => {
+    seen.add(msg.id);
+    const updated = overlay[msg.id];
+    return updated ? mergeReportMessage(msg, updated) : msg;
+  });
+  for (const id of ids) {
+    if (!seen.has(id)) {
+      out.push(overlay[id]);
+    }
+  }
+  return out;
+}
+
 /** Normalise the free-text status into a known lifecycle state. */
 export function classifyReport(msg: ReportMessage): ReportStatus {
   const status = msg?.data?.status;

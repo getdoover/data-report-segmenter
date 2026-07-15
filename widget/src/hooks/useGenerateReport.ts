@@ -5,6 +5,12 @@
  * (matchReportMessage) and tracks that message's lifecycle
  * Generating -> Complete/Failed. On Complete it exposes the attachment's signed
  * URL and attempts a one-shot auto-download.
+ *
+ * `messages` must be an update-aware view (useReportsWatch) — a plain
+ * useChannelMessages list never sees the terminal update_message flip. As a
+ * second safety net, while THIS hook's own request is non-terminal (including
+ * "Submitting", where even the create event may have been dropped) it calls
+ * `refetchMessages` every ~10s.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -64,10 +70,13 @@ function triggerDownload(url: string, filename: string): void {
   document.body.removeChild(a);
 }
 
+const REQUEST_POLL_INTERVAL_MS = 10000;
+
 export function useGenerateReport(
   agentId: string | undefined,
   appKey: string,
   messages: ReportMessage[],
+  refetchMessages?: () => void,
 ): GenerateReportResult {
   const rpc = useSendRpc<GenerateReportRequest, unknown>(
     { agentId, channelName: RPC_CHANNEL },
@@ -112,6 +121,24 @@ export function useGenerateReport(
         });
 
   const download = matched ? reportDownload(matched) : null;
+
+  // Poll while our own request is non-terminal (Submitting = no job message
+  // matched yet, Generating = matched but not flipped) so a dropped WS event
+  // can't strand the panel. Refetch fn is read through a ref so an unstable
+  // closure identity doesn't reset the interval each render.
+  const refetchRef = useRef(refetchMessages);
+  refetchRef.current = refetchMessages;
+  const requestSettled =
+    request === null || (matched !== null && classifyReport(matched) !== "Generating");
+  useEffect(() => {
+    if (requestSettled) {
+      return;
+    }
+    const timer = setInterval(() => {
+      refetchRef.current?.();
+    }, REQUEST_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [requestSettled]);
 
   // Auto-download once when a matched report completes with an attachment.
   useEffect(() => {

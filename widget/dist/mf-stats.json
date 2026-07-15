@@ -9,7 +9,7 @@
       "buildName": "data-report-segmenter-widget"
     },
     "remoteEntry": {
-      "name": "static/js/DataReportSegmenterWidget.bcbf1a56.js",
+      "name": "static/js/DataReportSegmenterWidget.c08a2c31.js",
       "path": "",
       "type": "global"
     },
@@ -37,7 +37,7 @@
         "js": {
           "async": [],
           "sync": [
-            "static/js/DataReportSegmenterWidget.bcbf1a56.js"
+            "static/js/DataReportSegmenterWidget.c08a2c31.js"
           ]
         },
         "css": {
@@ -59,7 +59,7 @@
         "js": {
           "async": [],
           "sync": [
-            "static/js/DataReportSegmenterWidget.bcbf1a56.js"
+            "static/js/DataReportSegmenterWidget.c08a2c31.js"
           ]
         },
         "css": {
@@ -83,7 +83,7 @@
         "js": {
           "async": [],
           "sync": [
-            "static/js/DataReportSegmenterWidget.bcbf1a56.js"
+            "static/js/DataReportSegmenterWidget.c08a2c31.js"
           ]
         },
         "css": {
@@ -103,7 +103,7 @@
       "federationContainerName": "customer_site",
       "moduleName": "RemoteComponentWrapper",
       "usedIn": [
-        "src/DataReportSegmenterWidget.tsx + 13 modules"
+        "src/DataReportSegmenterWidget.tsx + 14 modules"
       ],
       "version": "[window.dooverCustomerSite_remoteUrl]"
     },
@@ -113,7 +113,7 @@
       "federationContainerName": "customer_site",
       "moduleName": "useRemoteParams",
       "usedIn": [
-        "src/DataReportSegmenterWidget.tsx + 13 modules"
+        "src/DataReportSegmenterWidget.tsx + 14 modules"
       ],
       "version": "[window.dooverCustomerSite_remoteUrl]"
     },
@@ -141,7 +141,7 @@
       "assets": {
         "js": {
           "sync": [
-            "static/js/async/__federation_expose_DataReportSegmenterWidget.a5013a07.js"
+            "static/js/async/__federation_expose_DataReportSegmenterWidget.8abb8111.js"
           ],
           "async": []
         },
