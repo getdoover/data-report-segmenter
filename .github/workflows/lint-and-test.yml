@@ -1,0 +1,26 @@
+name: "Lint and Test Code"
+
+# PRO (cloud processor) app: there is no container image to build/push, so
+# this repo has no build-image workflow - just lint, test and schema
+# validation on every push/PR.
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint Code
+    uses: ./.github/workflows/run-linting.yml
+    secrets: inherit
+
+  test:
+    name: Test Code
+    uses: ./.github/workflows/run-tests.yml
+    secrets: inherit
+
+  validate:
+    name: Validate Schemas
+    uses: ./.github/workflows/validate-schema.yml
+    secrets: inherit

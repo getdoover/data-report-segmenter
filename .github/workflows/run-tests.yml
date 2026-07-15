@@ -1,0 +1,25 @@
+name: Run Tests
+
+on:
+  workflow_call:
+
+jobs:
+  run_tests:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    # No device-base container: a PRO app has no hardware/device dependency;
+    # the tests exercise the pure segment/report logic against plain Python.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install the project
+        run: uv sync --locked --dev
+
+      - name: Run tests
+        run: uv run pytest tests
