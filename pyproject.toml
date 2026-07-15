@@ -1,0 +1,33 @@
+[project]
+name = "data-report-segmenter"
+version = "0.1.0"
+description = "Doover cloud processor (PRO) that segments a single timeline into operator-labelled kinds and generates per-kind CSV reports of ui_state NumericVariables"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydoover>=1.9.1",
+]
+
+[project.scripts]
+export-config = "data_report_segmenter.app_config:export"
+export-ui = "data_report_segmenter.app_ui:export"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/data_report_segmenter"]
+
+[dependency-groups]
+dev = [
+    "aiohttp>=3.11.18",
+    "grpcio>=1.71.0",
+    "protobuf>=6.30.2",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]
