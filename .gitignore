@@ -22,3 +22,4 @@ widget/assets/
 
 # OS
 .DS_Store
+widget/dist/

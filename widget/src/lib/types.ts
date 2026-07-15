@@ -24,6 +24,21 @@ export const RPC_CHANNEL = "dv-rpc";
 /** Channel carrying the generated-report job messages. */
 export const REPORTS_CHANNEL = "segment_reports";
 
+/**
+ * A visible time range, in epoch **milliseconds** — mirrors Doover's
+ * `interpreterV2/types.ts` `Timespan` shape (the `{after, before}` variant the
+ * Gantt/brush/picker all speak). `limit` is carried for wire-parity but unused
+ * by the widget's client-side timeline math.
+ */
+export interface Timespan {
+  /** epoch ms — inclusive lower bound of the visible window. */
+  after: number;
+  /** epoch ms — inclusive upper bound of the visible window. */
+  before: number;
+  /** optional page limit (Doover parity; unused here). */
+  limit?: number;
+}
+
 /** Extracted, defaulted config for this install. */
 export interface AppConfig {
   segmentKinds: string[];

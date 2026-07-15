@@ -17,7 +17,9 @@ function pad2(n: number): string {
 
 /** Filesystem-safe: keep [A-Za-z0-9._-], collapse the rest to "_". */
 export function sanitizeSegment(value: string): string {
-  const cleaned = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  const cleaned = value
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
   return cleaned === "" ? "none" : cleaned;
 }
 
@@ -104,6 +106,32 @@ export function formatRelativeSince(
   }
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+/**
+ * Compact human duration for a millisecond span, e.g. "45s", "12m", "3h 20m",
+ * "2d 5h". Used in the Gantt bar tooltips. Always non-negative.
+ */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return "0s";
+  }
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) {
+    return `${totalSec}s`;
+  }
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) {
+    return `${totalMin}m`;
+  }
+  const totalHours = Math.floor(totalMin / 60);
+  if (totalHours < 24) {
+    const mins = totalMin % 60;
+    return mins === 0 ? `${totalHours}h` : `${totalHours}h ${mins}m`;
+  }
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
 }
 
 /** Local, human-readable absolute time (for the `title`/tooltip). */

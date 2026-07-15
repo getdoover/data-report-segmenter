@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   defaultReportRange,
   formatAbsolute,
+  formatDuration,
   formatRelativeSince,
   fromDatetimeLocalValue,
   reportFilename,
@@ -64,6 +65,17 @@ test("formatRelativeSince buckets", () => {
   assert.equal(formatRelativeSince(now - 3 * 3600000, now), "3h ago");
   assert.equal(formatRelativeSince(now - 2 * 86400000, now), "2d ago");
   assert.equal(formatRelativeSince(now + 60000, now), "just now");
+});
+
+test("formatDuration buckets seconds/minutes/hours/days", () => {
+  assert.equal(formatDuration(0), "0s");
+  assert.equal(formatDuration(-5), "0s");
+  assert.equal(formatDuration(45 * 1000), "45s");
+  assert.equal(formatDuration(12 * 60 * 1000), "12m");
+  assert.equal(formatDuration(3 * 3600 * 1000), "3h");
+  assert.equal(formatDuration((3 * 3600 + 20 * 60) * 1000), "3h 20m");
+  assert.equal(formatDuration(2 * 86400 * 1000), "2d");
+  assert.equal(formatDuration((2 * 86400 + 5 * 3600) * 1000), "2d 5h");
 });
 
 test("formatAbsolute renders em-dash for null", () => {

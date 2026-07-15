@@ -18,8 +18,10 @@
     "@rsbuild/core": "^1.6.14",
     "@rsbuild/plugin-react": "^1.4.2",
     "@tanstack/react-query": "~5.90.2",
+    "dayjs": "^1.11.7",
     "doover-js": "^0.6.8",
     "react": "^18.3.1",
+    "react-day-picker": "^9.13.0",
     "react-dom": "^18.3.1",
     "react-router": "^7.7.0",
     "serve": "^14.2.5"

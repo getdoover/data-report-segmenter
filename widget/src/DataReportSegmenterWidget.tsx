@@ -6,17 +6,17 @@ import { useRemoteParams } from "customer_site/useRemoteParams";
 import { useAgentChannel } from "doover-js/react";
 
 import { extractAppConfig, extractCurrentSegment } from "./lib/config.ts";
-import {
-  deriveReportOptions,
-  deriveSegmentOptions,
-} from "./lib/options.ts";
+import { deriveReportOptions, deriveSegmentOptions } from "./lib/options.ts";
 import { sortReportsDesc } from "./lib/reports.ts";
 import { resolveTheme } from "./lib/theme.ts";
-import { DEFAULT_APP_KEY } from "./lib/types.ts";
+import { DEFAULT_APP_KEY, type Timespan } from "./lib/types.ts";
+import { DEFAULT_FETCH_WINDOW_MS, defaultTimespan } from "./lib/timeline.ts";
 import { useSwitchSegment } from "./hooks/useSwitchSegment.ts";
 import { useGenerateReport } from "./hooks/useGenerateReport.ts";
 import { useReportsWatch } from "./hooks/useReportsWatch.ts";
+import { useSegmentHistory } from "./hooks/useSegmentHistory.ts";
 import { SegmentHeader } from "./components/SegmentHeader.tsx";
+import { TimelineSection } from "./components/TimelineSection.tsx";
 import { GenerateReportPanel } from "./components/GenerateReportPanel.tsx";
 import { ReportList } from "./components/ReportList.tsx";
 import { Button, Card } from "./components/ui.tsx";
@@ -107,7 +107,8 @@ function DataReportSegmenterInner({
   );
 
   const switchOptions = useMemo(
-    () => deriveSegmentOptions(config.segmentKinds, config.showNone, current.kind),
+    () =>
+      deriveSegmentOptions(config.segmentKinds, config.showNone, current.kind),
     [config.segmentKinds, config.showNone, current.kind],
   );
   const reportOptions = useMemo(
@@ -123,6 +124,16 @@ function DataReportSegmenterInner({
   const [showReport, setShowReport] = useState(false);
   const now = Date.now();
 
+  // Visible timeline window — the single source of truth shared by the Gantt,
+  // the brush, the date picker, and (as a pre-fill) the report range.
+  const [span, setSpan] = useState<Timespan>(() => defaultTimespan(Date.now()));
+  const history = useSegmentHistory(
+    agentId,
+    appKey,
+    DEFAULT_FETCH_WINDOW_MS,
+    now,
+  );
+
   return (
     <Card tokens={tokens}>
       <SegmentHeader
@@ -136,6 +147,16 @@ function DataReportSegmenterInner({
         error={switcher.error}
         now={now}
         onSelect={switcher.switchTo}
+      />
+
+      <TimelineSection
+        tokens={tokens}
+        segments={history.segments}
+        dataExtent={history.extent}
+        span={span}
+        onSpanChange={setSpan}
+        now={now}
+        loading={history.loading}
       />
 
       <div style={{ marginTop: 10 }}>
@@ -155,6 +176,7 @@ function DataReportSegmenterInner({
           active={reporter.active}
           fireError={reporter.fireError}
           onGenerate={reporter.generate}
+          defaultRange={{ startTs: span.after, endTs: span.before }}
         />
       )}
 
