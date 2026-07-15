@@ -202,6 +202,7 @@ export function GanttTimeline({
           style={{
             display: "flex",
             flexWrap: "wrap",
+            justifyContent: "center",
             gap: 10,
             marginTop: 6,
           }}

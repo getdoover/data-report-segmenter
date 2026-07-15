@@ -44,36 +44,39 @@ export function TimelineSection({
   const brushable = brushExtent.before > brushExtent.after;
 
   return (
-    <div
-      style={{
-        marginTop: 12,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
+    <div style={{ marginTop: 12 }}>
+      {/* Controls + chart share one 75%-wide centred column so the Generate
+          Report button and date picker sit inline with the Gantt edges rather
+          than hanging off the card edges. */}
       <div
         style={{
+          width: "75%",
+          margin: "0 auto",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
+          flexDirection: "column",
           gap: 8,
         }}
       >
-        <Button tokens={tokens} variant="primary" onClick={onToggleReport}>
-          {showReport ? "Hide Report" : "Generate Report"}
-        </Button>
-        <DateRangePicker
-          tokens={tokens}
-          value={span}
-          onChange={onSpanChange}
-          now={now}
-        />
-      </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
+          <Button tokens={tokens} variant="primary" onClick={onToggleReport}>
+            {showReport ? "Hide Report" : "Generate Report"}
+          </Button>
+          <DateRangePicker
+            tokens={tokens}
+            value={span}
+            onChange={onSpanChange}
+            now={now}
+          />
+        </div>
 
-      {/* Slim the chart to 75% width, centred (12.5% each side). */}
-      <div style={{ width: "75%", margin: "0 auto" }}>
         <GanttTimeline
           tokens={tokens}
           segments={segments}
@@ -83,15 +86,13 @@ export function TimelineSection({
         />
 
         {brushable && (
-          <div style={{ marginTop: 8 }}>
-            <TimelineBrush
-              tokens={tokens}
-              segments={segments}
-              extent={brushExtent}
-              value={span}
-              onChange={onSpanChange}
-            />
-          </div>
+          <TimelineBrush
+            tokens={tokens}
+            segments={segments}
+            extent={brushExtent}
+            value={span}
+            onChange={onSpanChange}
+          />
         )}
       </div>
     </div>
