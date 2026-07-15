@@ -79,11 +79,8 @@
                     "title": "Subscription",
                     "x-name": "dv_proc_subscriptions",
                     "x-hidden": false,
-                    "type": [
-                        "array",
-                        "null"
-                    ],
-                    "x-required": false,
+                    "type": "array",
+                    "x-required": true,
                     "description": "A list of channels to subscribe to.",
                     "default": [
                         "dv-rpc"
@@ -725,6 +722,7 @@
             },
             "additionalElements": true,
             "required": [
+                "dv_proc_subscriptions",
                 "dv_proc_schedules"
             ]
         },
