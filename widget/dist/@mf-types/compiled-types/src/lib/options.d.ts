@@ -20,6 +20,18 @@
  */
 export declare function deriveSegmentOptions(segmentKinds: string[], showNone: boolean, ensureKind?: string | null): string[];
 /**
+ * Initial dropdown value when the operator opens the switch editor.
+ *
+ * If the current kind is one of the options, start there (confirming without
+ * changing it is then a harmless no-op). Otherwise — notably a hidden "None"
+ * current segment with configured kinds — start on the FIRST option. This is
+ * what makes the very first switch possible: a bare <select> fires no change
+ * event when the wanted value is already the one shown, so relying on onChange
+ * alone made the first configured kind unreachable. With an explicit draft +
+ * Confirm, the first option is selectable on the first try.
+ */
+export declare function initialSwitchDraft(options: string[], currentKind: string | null): string;
+/**
  * Options for the Generate Report dropdown — "None" is always offered.
  */
 export declare function deriveReportOptions(segmentKinds: string[], ensureKind?: string | null): string[];

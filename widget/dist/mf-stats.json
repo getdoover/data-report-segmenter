@@ -9,7 +9,7 @@
       "buildName": "data-report-segmenter-widget"
     },
     "remoteEntry": {
-      "name": "static/js/DataReportSegmenterWidget.c08a2c31.js",
+      "name": "static/js/DataReportSegmenterWidget.194749a8.js",
       "path": "",
       "type": "global"
     },
@@ -37,7 +37,7 @@
         "js": {
           "async": [],
           "sync": [
-            "static/js/DataReportSegmenterWidget.c08a2c31.js"
+            "static/js/DataReportSegmenterWidget.194749a8.js"
           ]
         },
         "css": {
@@ -59,7 +59,7 @@
         "js": {
           "async": [],
           "sync": [
-            "static/js/DataReportSegmenterWidget.c08a2c31.js"
+            "static/js/DataReportSegmenterWidget.194749a8.js"
           ]
         },
         "css": {
@@ -83,7 +83,7 @@
         "js": {
           "async": [],
           "sync": [
-            "static/js/DataReportSegmenterWidget.c08a2c31.js"
+            "static/js/DataReportSegmenterWidget.194749a8.js"
           ]
         },
         "css": {
@@ -141,7 +141,7 @@
       "assets": {
         "js": {
           "sync": [
-            "static/js/async/__federation_expose_DataReportSegmenterWidget.8abb8111.js"
+            "static/js/async/__federation_expose_DataReportSegmenterWidget.a7bf41f3.js"
           ],
           "async": []
         },
