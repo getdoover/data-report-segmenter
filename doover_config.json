@@ -18,7 +18,18 @@
             "Handler": "src.data_report_segmenter.handler"
         },
         "staging_config": {
-            "id": 202988397197834758
+            "id": 202988397197834758,
+            "lambda_config": {
+                "Environment": {
+                    "Variables": {
+                        "DOOVER_DATA_ENDPOINT": "https://data.staging.udoover.com/api"
+                    }
+                },
+                "Runtime": "python3.13",
+                "Timeout": 300,
+                "Handler": "src.data_report_segmenter.handler",
+                "MemorySize": 256
+            }
         },
         "image_name": null,
         "build_widget_command": "npm --prefix widget run build",
