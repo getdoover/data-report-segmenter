@@ -7,7 +7,7 @@
  * tailwind/shadcn CSS, no external stylesheet).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { DayPicker, type DateRange } from "react-day-picker";
 import dayjs from "dayjs";
 
@@ -44,28 +44,12 @@ export function DateRangePicker({
     from: dayjs(value.after).toDate(),
     to: dayjs(value.before).toDate(),
   }));
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
   useEffect(() => {
     setRange({
       from: dayjs(value.after).toDate(),
       to: dayjs(value.before).toDate(),
     });
   }, [value]);
-
-  // Close on outside click.
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [open]);
 
   const spanMs = value.before - value.after;
 
@@ -109,10 +93,7 @@ export function DateRangePicker({
   } as const;
 
   return (
-    <div
-      ref={wrapRef}
-      style={{ position: "relative", display: "inline-block" }}
-    >
+    <div style={{ display: "inline-block" }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -133,20 +114,38 @@ export function DateRangePicker({
       </button>
 
       {open && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 10,
-            top: "calc(100% + 4px)",
-            left: 0,
-            background: tokens.bg,
-            color: tokens.text,
-            border: `1px solid ${tokens.border}`,
-            borderRadius: 8,
-            padding: 10,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-          }}
-        >
+        <>
+          {/* Backdrop: dims the page and closes on click. Fixed so the
+              calendar never overflows the widget's box (no host scrollbars). */}
+          <div
+            onClick={() => setOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              zIndex: 1000,
+            }}
+          />
+          {/* Centred calendar overlay. */}
+          <div
+            role="dialog"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              zIndex: 1001,
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: tokens.bg,
+              color: tokens.text,
+              border: `1px solid ${tokens.border}`,
+              borderRadius: 8,
+              padding: 10,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+            }}
+          >
           <DayPicker
             mode="range"
             selected={range}
@@ -227,7 +226,8 @@ export function DateRangePicker({
               Apply
             </Button>
           </div>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

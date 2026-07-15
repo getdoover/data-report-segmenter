@@ -11,6 +11,7 @@ import type { Timespan } from "../lib/types.ts";
 import { GanttTimeline } from "./GanttTimeline.tsx";
 import { TimelineBrush } from "./TimelineBrush.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
+import { Button } from "./ui.tsx";
 
 export function TimelineSection({
   tokens,
@@ -20,6 +21,8 @@ export function TimelineSection({
   onSpanChange,
   now,
   loading,
+  showReport,
+  onToggleReport,
 }: {
   tokens: ThemeTokens;
   segments: Segment[];
@@ -28,6 +31,8 @@ export function TimelineSection({
   onSpanChange: (span: Timespan) => void;
   now: number;
   loading: boolean;
+  showReport: boolean;
+  onToggleReport: () => void;
 }) {
   // The brush strip must always contain both the full data extent and the
   // current visible window (and "now"), so the selection window never falls
@@ -56,9 +61,9 @@ export function TimelineSection({
           gap: 8,
         }}
       >
-        <span style={{ fontSize: 12, color: tokens.subtext, fontWeight: 500 }}>
-          Timeline
-        </span>
+        <Button tokens={tokens} variant="primary" onClick={onToggleReport}>
+          {showReport ? "Hide Report" : "Generate Report"}
+        </Button>
         <DateRangePicker
           tokens={tokens}
           value={span}
@@ -67,23 +72,28 @@ export function TimelineSection({
         />
       </div>
 
-      <GanttTimeline
-        tokens={tokens}
-        segments={segments}
-        span={span}
-        now={now}
-        loading={loading}
-      />
-
-      {brushable && (
-        <TimelineBrush
+      {/* Slim the chart to 75% width, centred (12.5% each side). */}
+      <div style={{ width: "75%", margin: "0 auto" }}>
+        <GanttTimeline
           tokens={tokens}
           segments={segments}
-          extent={brushExtent}
-          value={span}
-          onChange={onSpanChange}
+          span={span}
+          now={now}
+          loading={loading}
         />
-      )}
+
+        {brushable && (
+          <div style={{ marginTop: 8 }}>
+            <TimelineBrush
+              tokens={tokens}
+              segments={segments}
+              extent={brushExtent}
+              value={span}
+              onChange={onSpanChange}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

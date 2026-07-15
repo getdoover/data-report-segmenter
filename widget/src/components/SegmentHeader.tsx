@@ -115,7 +115,7 @@ export function SegmentHeader({
         ) : (
           <Button
             tokens={tokens}
-            variant="ghost"
+            variant="primary"
             disabled={disabled || switching}
             onClick={openEditor}
           >
