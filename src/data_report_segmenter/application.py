@@ -23,8 +23,11 @@ TAG_VALUES_CHANNEL = "tag_values"
 UI_STATE_CHANNEL = "ui_state"
 REPORTS_CHANNEL = "segment_reports"
 
-# Key of the open-segment pointer in the tag_values aggregate (namespaced
-# under this app_key automatically by set_tag).
+# Key of the open-segment pointer in the tag_values aggregate, stored under
+# this app_key. We read/write it via the data client directly rather than the
+# tag manager: pydoover 1.9.1's tag-commit path passes return_aggregate= to
+# ProcessorDataClient.update_channel_aggregate, which does not accept it
+# (TypeError). See _read_current_segment / _write_current_segment.
 CURRENT_SEGMENT_TAG = "current_segment"
 
 APP_NAME = "data_report_segmenter"
@@ -85,30 +88,41 @@ class DataReportSegmenterApp(Application):
 
     # -- open-segment state --------------------------------------------------
 
-    def _current_segment(self) -> dict | None:
-        """Read the open segment, distinguishing genuinely-absent from default.
+    async def _current_segment(self) -> dict | None:
+        """Read the open segment straight from the tag_values aggregate.
 
-        ``current_segment`` is stored as a plain aggregate value (no typed-tag
-        default), so a KeyError here means it has never been seeded.
+        Deliberately NOT via the tag manager: pydoover 1.9.1's tag-commit path
+        passes ``return_aggregate=`` to ``ProcessorDataClient`` (which rejects
+        it), so we read and write ``current_segment`` directly. A missing key
+        means it has genuinely never been seeded -> caller seeds "None".
         """
-        try:
-            value = self.tag_manager.get_tag(CURRENT_SEGMENT_TAG, raise_key_error=True)
-        except KeyError:
-            return None
-        if not isinstance(value, dict):
-            return None
-        return value
+        aggregate = await self.api.fetch_channel_aggregate(TAG_VALUES_CHANNEL)
+        block = (aggregate.data or {}).get(self.app_key) or {}
+        value = block.get(CURRENT_SEGMENT_TAG)
+        return value if isinstance(value, dict) else None
+
+    async def _write_current_segment(self, segment: dict) -> None:
+        """PATCH-merge the open-segment pointer into ``tag_values.<app_key>``.
+
+        Replaces ``set_tag``: the tag manager's commit path is unusable on a
+        processor in pydoover 1.9.1 (return_aggregate= TypeError). A bare
+        aggregate PATCH under our app_key keeps the exact same on-the-wire
+        shape the widget reads (``tag_values[app_key].current_segment``).
+        """
+        await self.api.update_channel_aggregate(
+            TAG_VALUES_CHANNEL, {self.app_key: {CURRENT_SEGMENT_TAG: segment}}
+        )
 
     async def _ensure_open_segment(self) -> dict:
         """Idempotently seed a "None" open segment if none exists yet."""
-        current = self._current_segment()
+        current = await self._current_segment()
         if current is not None:
             return current
         now_ts = _now_ms()
         seeded = seg.make_open_segment(
             seg.default_open_kind(self._segment_kinds()), now_ts
         )
-        await self.set_tag(CURRENT_SEGMENT_TAG, seeded)
+        await self._write_current_segment(seeded)
         log.info("Seeded open segment: %s", seeded)
         return seeded
 
@@ -148,7 +162,7 @@ class DataReportSegmenterApp(Application):
 
         # Open the new segment (aggregate pointer).
         new_segment = seg.make_open_segment(kind, switch_ts)
-        await self.set_tag(CURRENT_SEGMENT_TAG, new_segment)
+        await self._write_current_segment(new_segment)
 
         log.info("Switched segment %s -> %s at %s", current["kind"], kind, switch_ts)
         return {"current_segment": new_segment}
@@ -225,7 +239,7 @@ class DataReportSegmenterApp(Application):
     # -- report engine (impure orchestration around pure report_lib) --------
 
     async def _build_report(self, kind, start_ts, end_ts):
-        current = self._current_segment()
+        current = await self._current_segment()
         closed_segments = await self._fetch_closed_segments(start_ts, end_ts)
         windows = seg.compute_windows(closed_segments, current, kind, start_ts, end_ts)
 
