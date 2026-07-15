@@ -32,6 +32,11 @@ APP_NAME = "data_report_segmenter"
 # History-fetch page size (REST list route caps this at 1500).
 _PAGE_LIMIT = 1500
 
+# Forward scan for the boundary-crossing segment record: first chunk size and
+# per-iteration growth factor (1 h, then 4 h, 16 h, ... until "now").
+_CROSS_SCAN_INITIAL_MS = 60 * 60 * 1000
+_CROSS_SCAN_GROWTH = 4
+
 
 class DataReportSegmenterApp(Application):
     """Processor: the single authoritative writer of segment state.
@@ -236,19 +241,56 @@ class DataReportSegmenterApp(Application):
     async def _fetch_closed_segments(self, start_ts, end_ts) -> list[dict]:
         """All closed-segment records overlapping [start_ts, end_ts].
 
-        Closed segments are stored with ``timestamp == end_ts``; a segment can
-        start before ``start_ts`` yet still overlap, so we page from the range
-        start (a little conservatism at the low end is harmless because
-        compute_windows clamps).
+        Closed-segment messages are timestamped at their END, so:
+
+        - LOW boundary is safe as-is: a segment crossing ``start_ts`` was
+          closed *inside* the range, so its message timestamp falls within
+          (start_ts, end_ts] and the backward page below fetches it
+          (compute_windows clamps its start to the range).
+        - HIGH boundary is NOT: a segment that starts inside the range but is
+          closed after ``end_ts`` has its message timestamp beyond
+          ``before=end_ts``. A bounded forward scan past ``end_ts`` finds the
+          first segment record there; segment contiguity means only that
+          first record can cross the boundary
+          (see segments.select_boundary_crossing_segment).
         """
+        segments = await self._page_segment_records(start_ts, end_ts)
+        crossing = await self._find_boundary_crossing_segment(end_ts)
+        if crossing is not None:
+            segments.append(crossing)
+        return segments
+
+    async def _find_boundary_crossing_segment(self, end_ts) -> dict | None:
+        """The segment record straddling ``end_ts``, if any.
+
+        Forward-scans (end_ts, now] in growing chunks until a chunk contains
+        a segment record; the earliest record found is the only possible
+        boundary-crosser (contiguity), kept iff it started before ``end_ts``.
+        pydoover's list_messages has no ascending-order option, so each chunk
+        is paged with the same backward-paging helper.
+        """
+        now_ts = _now_ms()
+        cursor = end_ts
+        chunk = _CROSS_SCAN_INITIAL_MS
+        while cursor < now_ts:
+            upper = min(cursor + chunk, now_ts)
+            candidates = await self._page_segment_records(cursor, upper)
+            if candidates:
+                return seg.select_boundary_crossing_segment(candidates, end_ts)
+            cursor = upper
+            chunk *= _CROSS_SCAN_GROWTH
+        return None
+
+    async def _page_segment_records(self, after_ts, before_ts) -> list[dict]:
+        """All ``record_type == "segment"`` messages in (after_ts, before_ts]."""
         segments: list[dict] = []
         seen: set[int] = set()
-        before_cursor: int | None = end_ts
+        before_cursor: int | None = before_ts
         while True:
             msgs = await self.api.list_messages(
                 TAG_VALUES_CHANNEL,
                 before=before_cursor,
-                after=start_ts,
+                after=after_ts,
                 limit=_PAGE_LIMIT,
                 field_names=["record_type", "kind", "start_ts", "end_ts"],
             )

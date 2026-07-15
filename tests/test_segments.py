@@ -161,3 +161,69 @@ def test_windows_zero_length_overlap_excluded():
     # A closed segment ending exactly at the range start contributes nothing.
     closed = [{"kind": "A", "start_ts": 0, "end_ts": 100}]
     assert seg.compute_windows(closed, None, "A", 100, 500) == []
+
+
+# --- end-boundary-crossing segment (fetch-side gap) -----------------------
+#
+# Closed-segment messages are timestamped at their END, so a segment that
+# starts inside the report range but closes after end_ts is NOT returned by
+# a before=end_ts fetch. select_boundary_crossing_segment picks the (at most
+# one) such record out of a forward scan past end_ts; compute_windows then
+# clamps it.
+
+# Coordinator's concrete scenario, in epoch-ms-like ints:
+# A[1000->1100], B[1100->1300], C open from 1300; report range [1030, 1200].
+_A = {"record_type": "segment", "kind": "A", "start_ts": 1000, "end_ts": 1100}
+_B = {"record_type": "segment", "kind": "B", "start_ts": 1100, "end_ts": 1300}
+
+
+def test_crossing_segment_selected_when_started_inside_range():
+    # B's message (ts 1300) lies beyond end_ts=1200; forward scan finds it.
+    assert seg.select_boundary_crossing_segment([_B], 1200) == _B
+
+
+def test_crossing_segment_picks_earliest_candidate():
+    later = {"record_type": "segment", "kind": "C", "start_ts": 1300, "end_ts": 1500}
+    assert seg.select_boundary_crossing_segment([later, _B], 1200) == _B
+
+
+def test_crossing_segment_none_when_first_starts_at_or_after_end():
+    # The earliest record past end_ts starts exactly at end_ts -> no overlap,
+    # and contiguity means no later record can cross either.
+    at_boundary = {
+        "record_type": "segment",
+        "kind": "B",
+        "start_ts": 1200,
+        "end_ts": 1400,
+    }
+    assert seg.select_boundary_crossing_segment([at_boundary], 1200) is None
+
+
+def test_crossing_segment_no_candidates():
+    assert seg.select_boundary_crossing_segment([], 1200) is None
+
+
+def test_crossing_segment_ignores_non_segment_records():
+    tag_log = {"some_tag": 42}
+    assert seg.select_boundary_crossing_segment([tag_log], 1200) is None
+    assert seg.select_boundary_crossing_segment([tag_log, _B], 1200) == _B
+
+
+def test_windows_coordinator_boundary_scenario():
+    # Report kind B over [1030, 1200]: the before=end_ts fetch returns only A;
+    # the forward scan contributes B; expect B clamped to [1100, 1200].
+    fetched = [_A]  # what the backward page over (1030, 1200] yields
+    crossing = seg.select_boundary_crossing_segment([_B], 1200)
+    assert crossing is not None
+    closed = fetched + [crossing]
+    open_seg = {"kind": "C", "start_ts": 1300}
+    assert seg.compute_windows(closed, open_seg, "B", 1030, 1200) == [(1100, 1200)]
+
+
+def test_windows_boundary_scenario_without_crossing_record_loses_window():
+    # Regression guard documenting the original bug: without the crossing
+    # record the B window silently vanishes.
+    assert (
+        seg.compute_windows([_A], {"kind": "C", "start_ts": 1300}, "B", 1030, 1200)
+        == []
+    )

@@ -114,3 +114,29 @@ def compute_windows(
 
     windows.sort()
     return windows
+
+
+def select_boundary_crossing_segment(
+    candidates: list[dict], end_ts: int
+) -> dict | None:
+    """The (at most one) closed segment that crosses the report end boundary.
+
+    Closed-segment messages are timestamped at their END, so a segment that
+    STARTS inside the requested range but was CLOSED after ``end_ts`` is not
+    found by a fetch bounded ``before=end_ts`` — the caller forward-scans past
+    ``end_ts`` and passes every segment record found there as ``candidates``.
+
+    Because segments are contiguous (no gaps, no overlaps), at most one
+    segment can straddle ``end_ts``: the candidate with the smallest end.
+    Any later segment record necessarily has ``start_ts >= end_ts`` and can
+    contribute nothing to the range. Returns that first candidate iff it
+    genuinely started before ``end_ts`` (``compute_windows`` clamps the
+    rest), else None.
+    """
+    segs = [c for c in candidates if c.get("record_type") == "segment"]
+    if not segs:
+        return None
+    first = min(segs, key=lambda c: int(c["end_ts"]))
+    if int(first["start_ts"]) < end_ts:
+        return first
+    return None
