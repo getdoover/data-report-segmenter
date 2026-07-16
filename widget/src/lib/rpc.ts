@@ -9,6 +9,7 @@
  */
 
 import type {
+  AddSegmentRequest,
   GenerateReportRequest,
   SwitchSegmentRequest,
 } from "./types.ts";
@@ -27,6 +28,15 @@ export function buildReportRequest(
   startTs: number,
   endTs: number,
 ): GenerateReportRequest {
+  return { kind, start_ts: startTs, end_ts: endTs };
+}
+
+/** `add_segment` request: paint [startTs, endTs] as `kind` (both epoch ms). */
+export function buildAddSegmentRequest(
+  kind: string,
+  startTs: number,
+  endTs: number,
+): AddSegmentRequest {
   return { kind, start_ts: startTs, end_ts: endTs };
 }
 

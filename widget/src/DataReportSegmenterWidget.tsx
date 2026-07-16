@@ -9,15 +9,21 @@ import { extractAppConfig, extractCurrentSegment } from "./lib/config.ts";
 import { deriveReportOptions, deriveSegmentOptions } from "./lib/options.ts";
 import { sortReportsDesc } from "./lib/reports.ts";
 import { resolveTheme } from "./lib/theme.ts";
-import { DEFAULT_APP_KEY, type Timespan } from "./lib/types.ts";
+import {
+  CONTROL_BUTTON_WIDTH,
+  DEFAULT_APP_KEY,
+  type Timespan,
+} from "./lib/types.ts";
 import { DEFAULT_FETCH_WINDOW_MS, defaultTimespan } from "./lib/timeline.ts";
 import { useSwitchSegment } from "./hooks/useSwitchSegment.ts";
 import { useGenerateReport } from "./hooks/useGenerateReport.ts";
 import { useReportsWatch } from "./hooks/useReportsWatch.ts";
 import { useSegmentHistory } from "./hooks/useSegmentHistory.ts";
+import { useAddSegment } from "./hooks/useAddSegment.ts";
 import { SegmentHeader } from "./components/SegmentHeader.tsx";
 import { TimelineSection } from "./components/TimelineSection.tsx";
 import { GenerateReportPanel } from "./components/GenerateReportPanel.tsx";
+import { AddSegmentPanel } from "./components/AddSegmentPanel.tsx";
 import { ReportList } from "./components/ReportList.tsx";
 import { Button, Card } from "./components/ui.tsx";
 
@@ -122,6 +128,7 @@ function DataReportSegmenterInner({
   const reporter = useGenerateReport(agentId, appKey, messages, refetch);
 
   const [showReport, setShowReport] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
   const now = Date.now();
 
   // Visible timeline window — the single source of truth shared by the Gantt,
@@ -133,6 +140,10 @@ function DataReportSegmenterInner({
     DEFAULT_FETCH_WINDOW_MS,
     now,
   );
+
+  // Retroactive add: on success, refetch the segment history (the add
+  // deletes/recreates segment messages the live subscription can't reconcile).
+  const adder = useAddSegment(agentId, appKey, history.refetch);
 
   return (
     <Card tokens={tokens}>
@@ -161,21 +172,59 @@ function DataReportSegmenterInner({
         />
       )}
 
-      {/* Reports toggle: right-justified, above the collapsible reports section. */}
+      {/* Reports + Add toggles: centred column, equal width. */}
       <div
         style={{
           marginTop: 12,
           display: "flex",
-          justifyContent: "flex-end",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
         }}
       >
         <Button
           tokens={tokens}
           variant="primary"
           onClick={() => setShowReport((v) => !v)}
+          style={{ width: CONTROL_BUTTON_WIDTH }}
         >
           {showReport ? "Hide Reports" : "Reports"}
         </Button>
+        <Button
+          tokens={tokens}
+          variant="primary"
+          onClick={() => setShowAdd((v) => !v)}
+          style={{ width: CONTROL_BUTTON_WIDTH }}
+        >
+          {showAdd ? `Hide Add` : `Add ${config.segmentsLabel}`}
+        </Button>
+      </div>
+
+      {/* Collapsible retroactive-add panel. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: showAdd ? "1fr" : "0fr",
+          transition: "grid-template-rows 0.3s ease",
+        }}
+      >
+        <div style={{ overflow: "hidden", minHeight: 0 }}>
+          <AddSegmentPanel
+            tokens={tokens}
+            options={reportOptions}
+            segmentsLabel={config.segmentsLabel}
+            pending={adder.pending}
+            error={adder.error}
+            defaultRange={{ startTs: span.after, endTs: span.before }}
+            onSave={async (kind, startTs, endTs) => {
+              const ok = await adder.add(kind, startTs, endTs);
+              if (ok) {
+                setShowAdd(false);
+              }
+            }}
+            onCancel={() => setShowAdd(false)}
+          />
+        </div>
       </div>
 
       {/* Collapsible reports section: generate form (left) + recent reports

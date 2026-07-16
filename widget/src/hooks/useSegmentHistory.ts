@@ -50,6 +50,12 @@ export interface SegmentHistoryResult {
   extent: Timespan | null;
   /** True while the first page is still loading with nothing to show yet. */
   loading: boolean;
+  /**
+   * Re-fetch the closed-segment messages from the server. Needed after a
+   * retroactive add, which DELETES and re-creates segment messages — the live
+   * create-only subscription can't remove the stale deleted ones on its own.
+   */
+  refetch: () => void;
 }
 
 const PAGE_LIMIT = 100;
@@ -94,6 +100,9 @@ export function useSegmentHistory(
   const extent = useMemo(() => segmentsExtent(segments), [segments]);
 
   const loading = query.isLoading && segments.length === 0;
+  const refetch = () => {
+    void query.refetch?.();
+  };
 
-  return { segments, extent, loading };
+  return { segments, extent, loading, refetch };
 }

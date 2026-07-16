@@ -71,6 +71,18 @@ export interface GenerateReportRequest {
   end_ts: number;
 }
 
+/** `add_segment` RPC request body (retroactive segment add). */
+export interface AddSegmentRequest {
+  kind: string;
+  /** epoch ms */
+  start_ts: number;
+  /** epoch ms */
+  end_ts: number;
+}
+
+/** Shared width for the header/report/add control buttons (kept equal). */
+export const CONTROL_BUTTON_WIDTH = 160;
+
 export type ReportStatus = "Generating" | "Complete" | "Failed" | "Unknown";
 
 /** Data payload of a `segment_reports` job message. */

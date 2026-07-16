@@ -227,3 +227,75 @@ def test_windows_boundary_scenario_without_crossing_record_loses_window():
         seg.compute_windows([_A], {"kind": "C", "start_ts": 1300}, "B", 1030, 1200)
         == []
     )
+
+
+# --- paint_segment (retroactive add / overlap-merge) ---------------------
+
+
+def _tl(*triples):
+    """Build a timeline from (kind, start, end) triples."""
+    return [{"kind": k, "start_ts": s, "end_ts": e} for (k, s, e) in triples]
+
+
+def _contiguous_one_kind(timeline, t0, tn):
+    """Assert the timeline tiles [t0, tn] with no gaps/overlaps/adjacent-dupes."""
+    assert timeline[0]["start_ts"] == t0
+    assert timeline[-1]["end_ts"] == tn
+    for i in range(1, len(timeline)):
+        assert timeline[i]["start_ts"] == timeline[i - 1]["end_ts"]  # contiguous
+        assert timeline[i]["kind"] != timeline[i - 1]["kind"]  # normalised
+
+
+def test_paint_empty_range_is_noop():
+    tl = _tl(("None", 0, 100))
+    assert seg.paint_segment(tl, 50, 50, "A", 100) == tl
+
+
+def test_paint_extends_overlapping_same_kind():
+    # A(0-5) B(5-10); paint A over (3-8) -> A grows to 8, B shrinks to (8-10).
+    out = seg.paint_segment(_tl(("A", 0, 5), ("B", 5, 10)), 3, 8, "A", 10)
+    assert out == _tl(("A", 0, 8), ("B", 8, 10))
+    _contiguous_one_kind(out, 0, 10)
+
+
+def test_paint_combines_multiple_same_kind_and_removes_between():
+    # A B A ; paint A over the whole middle+edges -> one big A, B removed.
+    out = seg.paint_segment(
+        _tl(("A", 0, 5), ("B", 5, 10), ("A", 10, 15)), 3, 12, "A", 15
+    )
+    assert out == _tl(("A", 0, 15))
+    _contiguous_one_kind(out, 0, 15)
+
+
+def test_paint_removes_fully_overlapped_other_kind():
+    # None B None ; paint None over all of B -> B gone, one None.
+    out = seg.paint_segment(
+        _tl(("None", 0, 5), ("B", 5, 10), ("None", 10, 20)), 5, 10, "None", 20
+    )
+    assert out == _tl(("None", 0, 20))
+
+
+def test_paint_inserts_new_kind_truncating_neighbours():
+    out = seg.paint_segment(_tl(("None", 0, 100)), 30, 60, "A", 100)
+    assert out == _tl(("None", 0, 30), ("A", 30, 60), ("None", 60, 100))
+    _contiguous_one_kind(out, 0, 100)
+
+
+def test_paint_into_open_segment_splits_it():
+    # open segment None(50-100=now); paint A over (60-80) -> tail None stays open.
+    out = seg.paint_segment(
+        _tl(("B", 0, 50), ("None", 50, 100)), 60, 80, "A", 100
+    )
+    assert out == _tl(("B", 0, 50), ("None", 50, 60), ("A", 60, 80), ("None", 80, 100))
+    assert out[-1]["end_ts"] == 100  # last segment is the new open one
+
+
+def test_paint_clamps_to_timeline_bounds():
+    out = seg.paint_segment(_tl(("None", 10, 90)), -50, 500, "A", 90)
+    assert out == _tl(("A", 10, 90))  # clamped to [10, 90], whole thing A
+
+
+def test_paint_boundary_start_merges_with_left_neighbour():
+    # A(0-5) B(5-10); paint A over (5-8) starting exactly on the boundary.
+    out = seg.paint_segment(_tl(("A", 0, 5), ("B", 5, 10)), 5, 8, "A", 10)
+    assert out == _tl(("A", 0, 8), ("B", 8, 10))

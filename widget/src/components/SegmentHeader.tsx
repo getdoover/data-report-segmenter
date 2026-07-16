@@ -20,7 +20,7 @@ import { useState } from "react";
 import { formatAbsolute, formatDuration } from "../lib/format.ts";
 import { initialSwitchDraft } from "../lib/options.ts";
 import type { ThemeTokens } from "../lib/theme.ts";
-import { NONE_KIND } from "../lib/types.ts";
+import { CONTROL_BUTTON_WIDTH, NONE_KIND } from "../lib/types.ts";
 import { Button, Select } from "./ui.tsx";
 
 export function SegmentHeader({
@@ -118,6 +118,7 @@ export function SegmentHeader({
               variant="primary"
               disabled={disabled || switching}
               onClick={openEditor}
+              style={{ width: CONTROL_BUTTON_WIDTH }}
             >
               Change {label}
             </Button>

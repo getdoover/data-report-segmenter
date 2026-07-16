@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 TAG_VALUES_CHANNEL = "tag_values"
 UI_STATE_CHANNEL = "ui_state"
 REPORTS_CHANNEL = "segment_reports"
+# Dedicated notification channel: one message per segment change (switch or
+# retroactive add). Other apps subscribe HERE (not tag_values, which every app
+# writes constantly) to learn when the segment timeline changed and re-derive.
+# Created on deployment so subscribers exist before the first change.
+DATA_SEGMENTS_CHANNEL = "data_segments"
 
 # Key of the open-segment pointer in the tag_values aggregate, stored under
 # this app_key. We read/write it via the data client directly rather than the
@@ -67,6 +72,50 @@ class DataReportSegmenterApp(Application):
     async def on_deployment(self, event: DeploymentEvent):
         # Explicit belt-and-suspenders seeding on deploy (also done in setup()).
         await self._ensure_open_segment()
+        await self._ensure_data_segments_channel()
+
+    async def _ensure_data_segments_channel(self) -> None:
+        """Create the data_segments notification channel so subscribers can bind.
+
+        Channels are otherwise created on first write; creating it on deploy
+        means other apps can subscribe to segment-change notifications before
+        the operator makes the first change. Idempotent — tolerate "exists".
+        """
+        try:
+            await self.api.create_channel(DATA_SEGMENTS_CHANNEL)
+            log.info("Ensured %s channel exists", DATA_SEGMENTS_CHANNEL)
+        except Exception as e:  # noqa: BLE001 - already-exists or transient
+            log.info("create_channel(%s): %s", DATA_SEGMENTS_CHANNEL, e)
+
+    async def _notify_segment_change(
+        self,
+        change_type: str,
+        kind: str,
+        affected_start: int,
+        affected_end: int,
+        author_id=None,
+    ) -> None:
+        """Announce a segment-timeline change on the data_segments channel.
+
+        One message per change so subscribed apps can re-derive whatever they
+        maintain over the affected window. Best-effort: a failed notification
+        must never fail the change itself.
+        """
+        payload = {
+            "record_type": "segment_change",
+            "change_type": change_type,  # "switch" | "retroactive_add"
+            "kind": kind,
+            "affected_start": int(affected_start),
+            "affected_end": int(affected_end),
+            "changed_at": _now_ms(),
+            "app_key": self.app_key,
+        }
+        if author_id is not None:
+            payload["author_id"] = author_id
+        try:
+            await self.api.create_message(DATA_SEGMENTS_CHANNEL, payload)
+        except Exception as e:  # noqa: BLE001
+            log.error("Failed to notify %s: %s", DATA_SEGMENTS_CHANNEL, e)
 
     async def on_message_create(self, event: MessageCreateEvent):
         # Opportunistic re-seed; the RPC managers have already dispatched any
@@ -164,8 +213,160 @@ class DataReportSegmenterApp(Application):
         new_segment = seg.make_open_segment(kind, switch_ts)
         await self._write_current_segment(new_segment)
 
+        # Tell other apps the timeline changed over [switch_ts, now].
+        await self._notify_segment_change(
+            "switch", kind, switch_ts, now_ts, author_id=author_id
+        )
+
         log.info("Switched segment %s -> %s at %s", current["kind"], kind, switch_ts)
         return {"current_segment": new_segment}
+
+    # -- RPC: add_segment (retroactive) --------------------------------------
+
+    @handler("add_segment")
+    async def add_segment(self, ctx, params):
+        """Retroactively paint [start_ts, end_ts] as ``kind`` on the timeline.
+
+        Overlap semantics (segments.paint_segment): same-kind overlaps extend /
+        combine; other-kind segments fully covered are removed, partial ones
+        truncated — every instant stays exactly one kind. Persisted as a minimal
+        diff against the existing closed-segment messages + the open-segment
+        aggregate, then announced on data_segments.
+        """
+        kind = params.get("kind")
+        start_ts = params.get("start_ts")
+        end_ts = params.get("end_ts")
+
+        if not isinstance(kind, str) or kind not in self._valid_kinds():
+            raise RPCError(
+                "INVALID_KIND",
+                f"kind {kind!r} is not one of {sorted(self._valid_kinds())}",
+            )
+        if not isinstance(start_ts, int) or not isinstance(end_ts, int):
+            raise RPCError("INVALID_RANGE", "start_ts and end_ts must be epoch-ms ints")
+        if start_ts >= end_ts:
+            raise RPCError("INVALID_RANGE", "start_ts must be before end_ts")
+
+        now_ts = _now_ms()
+        end_ts = min(end_ts, now_ts)  # cannot paint the future
+        if start_ts >= end_ts:
+            raise RPCError("INVALID_RANGE", "range is entirely in the future")
+
+        open_seg = await self._ensure_open_segment()
+
+        # Fetch the closed segments that could be affected: everything ending
+        # after (start_ts - 1) — i.e. the segment containing start_ts, its left
+        # neighbour when start_ts is exactly on a boundary, and all segments
+        # after it up to the open segment. Segments entirely before this window
+        # are untouched. Closed segments all end < now (the open one covers now)
+        # so no forward boundary-scan is needed here.
+        closed_with_ids = await self._fetch_closed_with_ids(start_ts - 1, now_ts)
+
+        # Build the effective timeline over the window (closed + open-as-end=now).
+        window = sorted(
+            (data for (_mid, data) in closed_with_ids),
+            key=lambda d: int(d["start_ts"]),
+        )
+        window.append(
+            {
+                "kind": open_seg["kind"],
+                "start_ts": int(open_seg["start_ts"]),
+                "end_ts": now_ts,
+            }
+        )
+
+        new_timeline = seg.paint_segment(window, start_ts, end_ts, kind, now_ts)
+
+        # Diff & persist. Closed-segment messages are keyed by end_ts (their
+        # message timestamp), which is unique in a contiguous timeline.
+        new_closed = new_timeline[:-1]
+        new_open = seg.make_open_segment(
+            new_timeline[-1]["kind"], new_timeline[-1]["start_ts"]
+        )
+
+        old_by_end = {int(d["end_ts"]): (mid, d) for (mid, d) in closed_with_ids}
+        new_by_end = {int(s["end_ts"]): s for s in new_closed}
+
+        changed = False
+
+        # Delete old closed-segment messages whose end vanished or whose
+        # start/kind changed (delete-before-recreate avoids any reliance on
+        # overwrite-by-timestamp).
+        for end, (mid, old) in old_by_end.items():
+            new = new_by_end.get(end)
+            if new is None or _seg_differs(old, new):
+                await self.api.delete_message(TAG_VALUES_CHANNEL, mid)
+                changed = True
+
+        # Create new / changed closed-segment records (backdated to their end).
+        author_id = getattr(ctx.message, "author_id", None)
+        for end, s in new_by_end.items():
+            old = old_by_end.get(end)
+            if old is not None and not _seg_differs(old[1], s):
+                continue
+            record = {
+                "record_type": "segment",
+                "kind": s["kind"],
+                "start_ts": int(s["start_ts"]),
+                "end_ts": int(end),
+            }
+            if author_id is not None:
+                record["author_id"] = author_id
+            await self.api.create_message(TAG_VALUES_CHANNEL, record, timestamp=int(end))
+            changed = True
+
+        # Update the open-segment pointer if it moved.
+        if new_open != {k: open_seg.get(k) for k in ("kind", "start_ts")}:
+            await self._write_current_segment(new_open)
+            changed = True
+
+        if changed:
+            await self._notify_segment_change(
+                "retroactive_add", kind, start_ts, end_ts, author_id=author_id
+            )
+
+        log.info(
+            "Retroactive add %s [%s, %s]: changed=%s", kind, start_ts, end_ts, changed
+        )
+        return {"current_segment": new_open, "changed": changed}
+
+    async def _fetch_closed_with_ids(
+        self, after_ts: int, before_ts: int
+    ) -> list[tuple[int, dict]]:
+        """(message_id, data) for every closed-segment record in (after, before].
+
+        Same time-vs-snowflake convention as _page_segment_records: first page
+        bounded by datetime, subsequent pages by int snowflake cursor.
+        """
+        after_dt = report_lib.ms_to_datetime(after_ts)
+        out: list[tuple[int, dict]] = []
+        seen: set[int] = set()
+        before_bound: datetime | int = report_lib.ms_to_datetime(before_ts)
+        cursor_id: int | None = None
+        while True:
+            msgs = await self.api.list_messages(
+                TAG_VALUES_CHANNEL,
+                before=before_bound,
+                after=after_dt,
+                limit=_PAGE_LIMIT,
+                field_names=["record_type", "kind", "start_ts", "end_ts"],
+            )
+            if not msgs:
+                break
+            for m in msgs:
+                if m.id in seen:
+                    continue
+                seen.add(m.id)
+                data = m.data or {}
+                if data.get("record_type") == "segment":
+                    out.append((m.id, data))
+            cursor_id = report_lib.next_page_cursor(
+                [m.id for m in msgs], cursor_id, _PAGE_LIMIT
+            )
+            if cursor_id is None:
+                break
+            before_bound = cursor_id
+        return out
 
     # -- RPC: generate_report ------------------------------------------------
 
@@ -388,6 +589,13 @@ class DataReportSegmenterApp(Application):
                 break
             before_bound = cursor_id
         return list(rows_by_id.values())
+
+
+def _seg_differs(old: dict, new: dict) -> bool:
+    """True if two closed segments with the same end differ in kind or start."""
+    return old.get("kind") != new.get("kind") or int(old.get("start_ts", 0)) != int(
+        new.get("start_ts", 0)
+    )
 
 
 def _now_ms() -> int:

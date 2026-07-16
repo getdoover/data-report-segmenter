@@ -116,6 +116,71 @@ def compute_windows(
     return windows
 
 
+def paint_segment(
+    timeline: list[dict], start: int, end: int, kind: str, now: int
+) -> list[dict]:
+    """Paint ``[start, end]`` as ``kind`` over a contiguous timeline, normalising.
+
+    ``timeline`` is a list of segment dicts ``{"kind","start_ts","end_ts"}`` that
+    contiguously cover ``[T0, now]`` (the currently-open segment represented with
+    ``end_ts == now``), sorted ascending, no gaps/overlaps. Returns the new
+    timeline (same shape + invariants); its LAST segment ends at ``now`` and is
+    the new open segment.
+
+    Semantics — every instant belongs to exactly one kind:
+      - ``[start, end]`` becomes ``kind``;
+      - existing ``kind`` segments touched by ``[start, end]`` merge with it (and
+        with each other) into one contiguous run — extending / combining;
+      - other-kind segments fully inside ``[start, end]`` are removed;
+      - other-kind segments partially overlapped are truncated.
+
+    ``start``/``end`` are clamped to ``[T0, now]``; an empty range is a no-op
+    (returns a copy of the input).
+    """
+    if not timeline:
+        return []
+    t0 = int(timeline[0]["start_ts"])
+    tn = int(timeline[-1]["end_ts"])
+    s = max(int(start), t0)
+    e = min(int(end), tn)
+    if s >= e:
+        return [
+            {"kind": seg["kind"], "start_ts": int(seg["start_ts"]), "end_ts": int(seg["end_ts"])}
+            for seg in timeline
+        ]
+
+    # Subtract [s, e] from every existing segment (keep the outside parts),
+    # then drop the painted interval in as one new segment of `kind`.
+    pieces: list[dict] = []
+    for seg in timeline:
+        a = int(seg["start_ts"])
+        b = int(seg["end_ts"])
+        k = seg["kind"]
+        if b <= s or a >= e:
+            pieces.append({"kind": k, "start_ts": a, "end_ts": b})
+            continue
+        if a < s:
+            pieces.append({"kind": k, "start_ts": a, "end_ts": s})
+        if b > e:
+            pieces.append({"kind": k, "start_ts": e, "end_ts": b})
+    pieces.append({"kind": kind, "start_ts": s, "end_ts": e})
+
+    pieces.sort(key=lambda p: p["start_ts"])
+
+    # Merge contiguous same-kind runs (the sorted pieces already tile [t0, tn]).
+    merged: list[dict] = []
+    for p in pieces:
+        if (
+            merged
+            and merged[-1]["kind"] == p["kind"]
+            and merged[-1]["end_ts"] == p["start_ts"]
+        ):
+            merged[-1]["end_ts"] = p["end_ts"]
+        else:
+            merged.append(p)
+    return merged
+
+
 def select_boundary_crossing_segment(
     candidates: list[dict], end_ts: int
 ) -> dict | None:
