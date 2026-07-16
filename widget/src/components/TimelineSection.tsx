@@ -11,7 +11,6 @@ import type { Timespan } from "../lib/types.ts";
 import { GanttTimeline } from "./GanttTimeline.tsx";
 import { TimelineBrush } from "./TimelineBrush.tsx";
 import { DateRangePicker } from "./DateRangePicker.tsx";
-import { Button } from "./ui.tsx";
 
 export function TimelineSection({
   tokens,
@@ -21,8 +20,6 @@ export function TimelineSection({
   onSpanChange,
   now,
   loading,
-  showReport,
-  onToggleReport,
 }: {
   tokens: ThemeTokens;
   segments: Segment[];
@@ -31,8 +28,6 @@ export function TimelineSection({
   onSpanChange: (span: Timespan) => void;
   now: number;
   loading: boolean;
-  showReport: boolean;
-  onToggleReport: () => void;
 }) {
   // The brush strip must always contain both the full data extent and the
   // current visible window (and "now"), so the selection window never falls
@@ -45,9 +40,7 @@ export function TimelineSection({
 
   return (
     <div style={{ marginTop: 12 }}>
-      {/* Controls + chart share one 75%-wide centred column so the Generate
-          Report button and date picker sit inline with the Gantt edges rather
-          than hanging off the card edges. */}
+      {/* Chart + controls share one 75%-wide centred column. */}
       <div
         style={{
           width: "75%",
@@ -57,18 +50,14 @@ export function TimelineSection({
           gap: 8,
         }}
       >
+        {/* Date-range picker, centred above the chart. */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 8,
+            justifyContent: "center",
           }}
         >
-          <Button tokens={tokens} variant="primary" onClick={onToggleReport}>
-            {showReport ? "Hide Report" : "Generate Report"}
-          </Button>
           <DateRangePicker
             tokens={tokens}
             value={span}

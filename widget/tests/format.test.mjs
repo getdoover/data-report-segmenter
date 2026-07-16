@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   defaultReportRange,
   formatAbsolute,
+  formatDateDMY,
   formatDuration,
   formatRelativeSince,
   fromDatetimeLocalValue,
@@ -76,6 +77,13 @@ test("formatDuration buckets seconds/minutes/hours/days", () => {
   assert.equal(formatDuration((3 * 3600 + 20 * 60) * 1000), "3h 20m");
   assert.equal(formatDuration(2 * 86400 * 1000), "2d");
   assert.equal(formatDuration((2 * 86400 + 5 * 3600) * 1000), "2d 5h");
+});
+
+test("formatDateDMY renders dd/mm/yy and em-dash for null", () => {
+  assert.equal(formatDateDMY(null), "—");
+  // 2026-03-05 local -> 05/03/26
+  assert.equal(formatDateDMY(new Date(2026, 2, 5, 13, 0).getTime()), "05/03/26");
+  assert.match(formatDateDMY(Date.now()), /^\d{2}\/\d{2}\/\d{2}$/);
 });
 
 test("formatAbsolute renders em-dash for null", () => {

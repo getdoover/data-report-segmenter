@@ -5,7 +5,7 @@
  * the signed-URL CSV; no separate "Download" word).
  */
 
-import { formatAbsolute } from "../lib/format.ts";
+import { formatDateDMY } from "../lib/format.ts";
 import {
   classifyReport,
   reportDownload,
@@ -47,15 +47,15 @@ export function ReportList({
           const kind = typeof msg.data.kind === "string" ? msg.data.kind : "?";
           const start =
             typeof msg.data.start_ts === "number"
-              ? formatAbsolute(msg.data.start_ts)
+              ? formatDateDMY(msg.data.start_ts)
               : "—";
           const end =
             typeof msg.data.end_ts === "number"
-              ? formatAbsolute(msg.data.end_ts)
+              ? formatDateDMY(msg.data.end_ts)
               : "—";
           const label = (
             <span>
-              {kind} · {start} → {end}
+              {kind} · {start} - {end}
             </span>
           );
 

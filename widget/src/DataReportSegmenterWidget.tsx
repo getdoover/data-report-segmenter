@@ -19,7 +19,7 @@ import { SegmentHeader } from "./components/SegmentHeader.tsx";
 import { TimelineSection } from "./components/TimelineSection.tsx";
 import { GenerateReportPanel } from "./components/GenerateReportPanel.tsx";
 import { ReportList } from "./components/ReportList.tsx";
-import { Card } from "./components/ui.tsx";
+import { Button, Card } from "./components/ui.tsx";
 
 /**
  * Data Report Segmenter cloud widget.
@@ -157,9 +157,24 @@ function DataReportSegmenterInner({
         onSpanChange={setSpan}
         now={now}
         loading={history.loading}
-        showReport={showReport}
-        onToggleReport={() => setShowReport((v) => !v)}
       />
+
+      {/* Generate Report button: below the Gantt, centred, above Recent Reports. */}
+      <div
+        style={{
+          marginTop: 12,
+          display: "flex",
+          justifyContent: "center",
+        }}
+      >
+        <Button
+          tokens={tokens}
+          variant="primary"
+          onClick={() => setShowReport((v) => !v)}
+        >
+          {showReport ? "Hide Report" : "Generate Report"}
+        </Button>
+      </div>
 
       {showReport && (
         <GenerateReportPanel

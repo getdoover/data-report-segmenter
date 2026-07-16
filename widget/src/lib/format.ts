@@ -134,6 +134,17 @@ export function formatDuration(ms: number): string {
   return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
 }
 
+/** Local date only, `dd/mm/yy` (used on the Recent Reports buttons). */
+export function formatDateDMY(ts: number | null): string {
+  if (ts === null || !Number.isFinite(ts)) {
+    return EM_DASH;
+  }
+  const d = new Date(ts);
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${pad2(
+    d.getFullYear() % 100,
+  )}`;
+}
+
 /** Local, human-readable absolute time (for the `title`/tooltip). */
 export function formatAbsolute(ts: number | null): string {
   if (ts === null || !Number.isFinite(ts)) {

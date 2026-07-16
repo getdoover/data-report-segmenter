@@ -17,10 +17,7 @@
 
 import { useState } from "react";
 
-import {
-  formatAbsolute,
-  formatRelativeSince,
-} from "../lib/format.ts";
+import { formatAbsolute, formatDuration } from "../lib/format.ts";
 import { initialSwitchDraft } from "../lib/options.ts";
 import type { ThemeTokens } from "../lib/theme.ts";
 import { NONE_KIND } from "../lib/types.ts";
@@ -129,7 +126,7 @@ export function SegmentHeader({
           <span>Switching…</span>
         ) : startTs !== null ? (
           <span title={formatAbsolute(startTs)}>
-            since {formatRelativeSince(startTs, now)}
+            {formatDuration(now - startTs)}
           </span>
         ) : (
           <span>default — no changes recorded yet</span>
