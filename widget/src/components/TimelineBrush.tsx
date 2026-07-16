@@ -231,9 +231,12 @@ function Handle({
       <div
         style={{
           width: 6,
-          height: "60%",
+          // Inset ~3px on every side (matching the side frame) and rounded to
+          // follow the pill's curvature, so the dark frame is uniformly thin —
+          // including the rounded top/bottom.
+          height: "calc(100% - 6px)",
           background: "#ffffff",
-          borderRadius: 1,
+          borderRadius: 3,
         }}
       />
     </div>

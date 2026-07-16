@@ -161,12 +161,12 @@ function DataReportSegmenterInner({
         />
       )}
 
-      {/* Reports toggle: centred, above the collapsible reports section. */}
+      {/* Reports toggle: right-justified, above the collapsible reports section. */}
       <div
         style={{
           marginTop: 12,
           display: "flex",
-          justifyContent: "center",
+          justifyContent: "flex-end",
         }}
       >
         <Button

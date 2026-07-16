@@ -72,53 +72,59 @@ export function SegmentHeader({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {/* 3-column grid so the change control sits at the widget's horizontal
+          centre (col 2), independent of the segment label's width (col 1). */}
       <div
         style={{
-          display: "flex",
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
           alignItems: "center",
-          justifyContent: "space-between",
           gap: 12,
         }}
       >
-        <div style={{ fontWeight: 600, fontSize: 15 }}>
+        <div style={{ fontWeight: 600, fontSize: 15, justifySelf: "start" }}>
           <span style={{ color: tokens.subtext, fontWeight: 500 }}>
             {label}:
           </span>{" "}
           <span>{displayKind}</span>
         </div>
 
-        {showEditor ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Select
-              tokens={tokens}
-              ariaLabel={`Choose ${label.toLowerCase()}`}
-              value={draft}
-              options={options}
-              disabled={disabled}
-              onChange={setDraft}
-            />
+        <div style={{ justifySelf: "center" }}>
+          {showEditor ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Select
+                tokens={tokens}
+                ariaLabel={`Choose ${label.toLowerCase()}`}
+                value={draft}
+                options={options}
+                disabled={disabled}
+                onChange={setDraft}
+              />
+              <Button
+                tokens={tokens}
+                variant="primary"
+                disabled={disabled || draft === ""}
+                onClick={confirm}
+              >
+                Confirm
+              </Button>
+              <Button tokens={tokens} variant="ghost" onClick={cancel}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
             <Button
               tokens={tokens}
               variant="primary"
-              disabled={disabled || draft === ""}
-              onClick={confirm}
+              disabled={disabled || switching}
+              onClick={openEditor}
             >
-              Confirm
+              Change {label}
             </Button>
-            <Button tokens={tokens} variant="ghost" onClick={cancel}>
-              Cancel
-            </Button>
-          </div>
-        ) : (
-          <Button
-            tokens={tokens}
-            variant="primary"
-            disabled={disabled || switching}
-            onClick={openEditor}
-          >
-            Change {label}
-          </Button>
-        )}
+          )}
+        </div>
+
+        <div />
       </div>
 
       <div style={{ fontSize: 12, color: tokens.subtext, minHeight: 16 }}>
