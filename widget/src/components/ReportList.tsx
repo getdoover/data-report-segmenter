@@ -28,7 +28,7 @@ export function ReportList({
   }
 
   return (
-    <div style={{ width: "25%", margin: "10px auto 0" }}>
+    <div style={{ width: "100%", marginTop: 10 }}>
       <div
         style={{
           fontSize: 12,

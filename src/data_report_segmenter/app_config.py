@@ -39,6 +39,11 @@ class DataReportSegmenterConfig(config.Schema):
         default="Segment",
         description="The word rendered before the current kind, e.g. 'Segment: Pipeline A'.",
     )
+    show_timeline_chart = config.Boolean(
+        "Show Timeline Chart",
+        default=True,
+        description="Show the segment timeline Gantt chart + range selector in the widget.",
+    )
 
     # --- processor plumbing ---------------------------------------------
     # dv_proc_subscriptions MUST include "dv-rpc" or no RPC (switch_segment /

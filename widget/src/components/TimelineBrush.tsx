@@ -230,7 +230,7 @@ function Handle({
     >
       <div
         style={{
-          width: 2,
+          width: 6,
           height: "60%",
           background: "#ffffff",
           borderRadius: 1,

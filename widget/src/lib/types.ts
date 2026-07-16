@@ -44,6 +44,8 @@ export interface AppConfig {
   segmentKinds: string[];
   showNone: boolean;
   segmentsLabel: string;
+  /** Whether the timeline Gantt chart + range selector is shown (default on). */
+  showTimeline: boolean;
 }
 
 /** Open-segment pointer, from `tag_values.<appKey>.current_segment`. */

@@ -27,6 +27,7 @@ test("extractAppConfig reads the app block", () => {
     segmentKinds: ["Pipeline A", "Pipeline B"],
     showNone: true,
     segmentsLabel: "Batch",
+    showTimeline: true,
   });
 });
 
@@ -35,12 +36,24 @@ test("extractAppConfig returns defaults for missing/malformed data", () => {
     segmentKinds: [],
     showNone: false,
     segmentsLabel: "Segment",
+    showTimeline: true,
   });
   assert.deepEqual(extractAppConfig({ applications: {} }, "x"), {
     segmentKinds: [],
     showNone: false,
     segmentsLabel: "Segment",
+    showTimeline: true,
   });
+});
+
+test("extractAppConfig hides timeline only on explicit false", () => {
+  assert.equal(
+    extractAppConfig(
+      { applications: { a: { show_timeline_chart: false } } },
+      "a",
+    ).showTimeline,
+    false,
+  );
 });
 
 test("extractAppConfig only treats explicit true as showNone", () => {

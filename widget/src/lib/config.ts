@@ -62,6 +62,8 @@ export function extractAppConfig(
     showNone: block.show_none_segment === true,
     segmentsLabel:
       asNonEmptyString(block.segments_label) ?? DEFAULT_SEGMENTS_LABEL,
+    // Default ON: only an explicit `false` hides the timeline.
+    showTimeline: block.show_timeline_chart !== false,
   };
 }
 

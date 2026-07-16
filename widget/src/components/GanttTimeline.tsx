@@ -15,10 +15,8 @@ import type { ReactNode } from "react";
 import { formatAbsolute, formatDuration } from "../lib/format.ts";
 import type { ThemeTokens } from "../lib/theme.ts";
 import {
-  barTextColor,
   generateAxisTicks,
   kindColor,
-  legendKinds,
   timeToFraction,
   type Segment,
 } from "../lib/timeline.ts";
@@ -47,7 +45,6 @@ export function GanttTimeline({
   const [hover, setHover] = useState<HoverState | null>(null);
 
   const ticks = generateAxisTicks(span, 6);
-  const kinds = legendKinds(segments);
   const nowFrac =
     now >= span.after && now <= span.before ? timeToFraction(now, span) : null;
 
@@ -107,20 +104,11 @@ export function GanttTimeline({
                   left: `${leftPct}%`,
                   width: `${widthPct}%`,
                   background: fill,
-                  color: barTextColor(fill),
                   borderRight: `1px solid ${tokens.panel}`,
                   boxSizing: "border-box",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 11,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
                   cursor: "default",
                 }}
-              >
-                {widthPct > 8 ? seg.kind : ""}
-              </div>
+              />
             );
           })
         )}
@@ -196,42 +184,6 @@ export function GanttTimeline({
         })}
       </div>
 
-      {/* Legend */}
-      {kinds.length > 0 && (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            gap: 10,
-            marginTop: 6,
-          }}
-        >
-          {kinds.map((kind) => (
-            <span
-              key={kind}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                fontSize: 11,
-                color: tokens.subtext,
-              }}
-            >
-              <span
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: 2,
-                  background: kindColor(kind, tokens.dark),
-                  display: "inline-block",
-                }}
-              />
-              {kind}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

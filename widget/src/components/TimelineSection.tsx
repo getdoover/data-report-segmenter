@@ -6,7 +6,7 @@
  */
 
 import type { ThemeTokens } from "../lib/theme.ts";
-import type { Segment } from "../lib/timeline.ts";
+import { kindColor, legendKinds, type Segment } from "../lib/timeline.ts";
 import type { Timespan } from "../lib/types.ts";
 import { GanttTimeline } from "./GanttTimeline.tsx";
 import { TimelineBrush } from "./TimelineBrush.tsx";
@@ -37,6 +37,7 @@ export function TimelineSection({
     before: Math.max(span.before, dataExtent?.before ?? span.before, now),
   };
   const brushable = brushExtent.before > brushExtent.after;
+  const kinds = legendKinds(segments);
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -82,6 +83,43 @@ export function TimelineSection({
             value={span}
             onChange={onSpanChange}
           />
+        )}
+
+        {/* Legend — beneath the overview graph. */}
+        {kinds.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "center",
+              gap: 10,
+              marginTop: 2,
+            }}
+          >
+            {kinds.map((kind) => (
+              <span
+                key={kind}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  fontSize: 11,
+                  color: tokens.subtext,
+                }}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 2,
+                    background: kindColor(kind, tokens.dark),
+                    display: "inline-block",
+                  }}
+                />
+                {kind}
+              </span>
+            ))}
+          </div>
         )}
       </div>
     </div>

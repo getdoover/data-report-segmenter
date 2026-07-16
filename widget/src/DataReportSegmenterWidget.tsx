@@ -149,17 +149,19 @@ function DataReportSegmenterInner({
         onSelect={switcher.switchTo}
       />
 
-      <TimelineSection
-        tokens={tokens}
-        segments={history.segments}
-        dataExtent={history.extent}
-        span={span}
-        onSpanChange={setSpan}
-        now={now}
-        loading={history.loading}
-      />
+      {config.showTimeline && (
+        <TimelineSection
+          tokens={tokens}
+          segments={history.segments}
+          dataExtent={history.extent}
+          span={span}
+          onSpanChange={setSpan}
+          now={now}
+          loading={history.loading}
+        />
+      )}
 
-      {/* Generate Report button: below the Gantt, centred, above Recent Reports. */}
+      {/* Reports toggle: centred, above the collapsible reports section. */}
       <div
         style={{
           marginTop: 12,
@@ -172,22 +174,44 @@ function DataReportSegmenterInner({
           variant="primary"
           onClick={() => setShowReport((v) => !v)}
         >
-          {showReport ? "Hide Report" : "Generate Report"}
+          {showReport ? "Hide Reports" : "Reports"}
         </Button>
       </div>
 
-      {showReport && (
-        <GenerateReportPanel
-          tokens={tokens}
-          options={reportOptions}
-          active={reporter.active}
-          fireError={reporter.fireError}
-          onGenerate={reporter.generate}
-          defaultRange={{ startTs: span.after, endTs: span.before }}
-        />
-      )}
-
-      <ReportList tokens={tokens} reports={recentReports} />
+      {/* Collapsible reports section: generate form (left) + recent reports
+          (right). Animated open/close via a 0fr<->1fr grid-row transition. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: showReport ? "1fr" : "0fr",
+          transition: "grid-template-rows 0.3s ease",
+        }}
+      >
+        <div style={{ overflow: "hidden", minHeight: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              alignItems: "flex-start",
+            }}
+          >
+            <div style={{ flex: "2 1 280px", minWidth: 0 }}>
+              <GenerateReportPanel
+                tokens={tokens}
+                options={reportOptions}
+                active={reporter.active}
+                fireError={reporter.fireError}
+                onGenerate={reporter.generate}
+                defaultRange={{ startTs: span.after, endTs: span.before }}
+              />
+            </div>
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+              <ReportList tokens={tokens} reports={recentReports} />
+            </div>
+          </div>
+        </div>
+      </div>
     </Card>
   );
 }

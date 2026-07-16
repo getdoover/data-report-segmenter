@@ -86,6 +86,19 @@
                     "default": "Segment",
                     "x-position": 2
                 },
+                "show_timeline_chart": {
+                    "title": "Show Timeline Chart",
+                    "x-name": "show_timeline_chart",
+                    "x-hidden": false,
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Show the segment timeline Gantt chart + range selector in the widget.",
+                    "default": true,
+                    "x-position": 3
+                },
                 "dv_proc_subscriptions": {
                     "title": "Subscription",
                     "x-name": "dv_proc_subscriptions",
@@ -96,7 +109,7 @@
                     "default": [
                         "dv-rpc"
                     ],
-                    "x-position": 3,
+                    "x-position": 4,
                     "items": {
                         "title": "Channel Subscription",
                         "x-name": "dv_proc_subscription",
@@ -114,7 +127,7 @@
                     "type": "string",
                     "x-required": true,
                     "description": "Specify a schedule to run this task.",
-                    "x-position": 4
+                    "x-position": 5
                 },
                 "dv_proc_timezone": {
                     "enum": [
@@ -728,7 +741,7 @@
                     "x-required": false,
                     "description": "The timezone to use for the report.",
                     "default": "Australia/Brisbane",
-                    "x-position": 5
+                    "x-position": 6
                 }
             },
             "additionalElements": true,
