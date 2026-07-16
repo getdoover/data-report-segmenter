@@ -24,7 +24,11 @@ import {
 import type { Timespan } from "../lib/types.ts";
 
 const STRIP_HEIGHT = 28;
-const HANDLE_WIDTH = 8;
+const HANDLE_WIDTH = 12;
+
+// Doover graph brush uses its slate "primary" for the selection + travellers.
+const DOOVER_PRIMARY = "var(--primary, #0f172a)";
+const SELECTION_FILL = "color-mix(in srgb, var(--primary, #0f172a) 20%, transparent)";
 
 type DragMode = "move" | "resize-l" | "resize-r";
 
@@ -174,35 +178,8 @@ export function TimelineBrush({
         );
       })}
 
-      {/* Dim outside the selection */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          bottom: 0,
-          left: 0,
-          width: `${leftPct}%`,
-          background: tokens.dark
-            ? "rgba(0,0,0,0.45)"
-            : "rgba(255,255,255,0.5)",
-          pointerEvents: "none",
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          bottom: 0,
-          left: `${leftPct + widthPct}%`,
-          right: 0,
-          background: tokens.dark
-            ? "rgba(0,0,0,0.45)"
-            : "rgba(255,255,255,0.5)",
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* Selection window */}
+      {/* Selection window: Doover's translucent slate fill (darker than the
+          track); the region outside is just the lighter track showing through. */}
       <div
         onPointerDown={startDrag("move")}
         style={{
@@ -211,34 +188,27 @@ export function TimelineBrush({
           bottom: 0,
           left: `${leftPct}%`,
           width: `${widthPct}%`,
-          border: `1px solid ${tokens.accent}`,
-          background: "transparent",
+          background: SELECTION_FILL,
           boxSizing: "border-box",
-          cursor: "grab",
+          cursor: "move",
         }}
       >
-        <Handle
-          side="left"
-          tokens={tokens}
-          onPointerDown={startDrag("resize-l")}
-        />
-        <Handle
-          side="right"
-          tokens={tokens}
-          onPointerDown={startDrag("resize-r")}
-        />
+        <Handle side="left" onPointerDown={startDrag("resize-l")} />
+        <Handle side="right" onPointerDown={startDrag("resize-r")} />
       </div>
     </div>
   );
 }
 
+/**
+ * Doover-style traveller: a dark rounded pill straddling the selection edge,
+ * with a white grip bar down the middle.
+ */
 function Handle({
   side,
-  tokens,
   onPointerDown,
 }: {
   side: "left" | "right";
-  tokens: ThemeTokens;
   onPointerDown: (e: React.PointerEvent) => void;
 }) {
   return (
@@ -248,13 +218,24 @@ function Handle({
         position: "absolute",
         top: 0,
         bottom: 0,
-        [side]: -1,
+        [side]: -HANDLE_WIDTH / 2,
         width: HANDLE_WIDTH,
-        background: tokens.accent,
-        opacity: 0.9,
+        background: DOOVER_PRIMARY,
         cursor: "ew-resize",
-        borderRadius: 2,
+        borderRadius: HANDLE_WIDTH / 2,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
       }}
-    />
+    >
+      <div
+        style={{
+          width: 2,
+          height: "60%",
+          background: "#ffffff",
+          borderRadius: 1,
+        }}
+      />
+    </div>
   );
 }

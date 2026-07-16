@@ -1,26 +1,43 @@
 /**
- * Calendar date-range picker: a popover holding a react-day-picker range
- * calendar plus quick presets (24h / 7d / 30d) and Apply. Mirrors Doover's
- * `dateTimeRange` interaction (react-day-picker range mode, dayjs formatting,
- * `value:{after,before}` in / `onChange(Timespan)` out) but is fully
- * self-contained: the calendar is themed inline from ThemeTokens (no Doover
- * tailwind/shadcn CSS, no external stylesheet).
+ * Date-range picker matching the Doover 2.0 graph's `dateTimeRange` control:
+ * an InputGroup-style trigger (two centred read-only date fields around an
+ * en-dash) that opens an anchored popover holding a react-day-picker range
+ * calendar, quick presets, and an Apply button.
+ *
+ * Styled from Doover's own shadcn/Tailwind CSS custom properties
+ * (--primary, --border, --input, --muted, --popover, --radius-*, ...) with hard
+ * slate-palette fallbacks, so it tracks the host theme exactly in light and
+ * dark — the widget renders inside the Doover page, so those vars resolve.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DayPicker, type DateRange } from "react-day-picker";
 import dayjs from "dayjs";
 
 import type { ThemeTokens } from "../lib/theme.ts";
 import { presetSpan, PRESETS } from "../lib/timeline.ts";
 import type { Timespan } from "../lib/types.ts";
-import { Button } from "./ui.tsx";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Doover theme custom properties (shadcn/Tailwind slate) with hard fallbacks.
+const C = {
+  primary: "var(--primary, #0f172a)",
+  primaryFg: "var(--primary-foreground, #f8fafc)",
+  foreground: "var(--foreground, #020617)",
+  popover: "var(--popover, #ffffff)",
+  input: "var(--input, #e2e8f0)",
+  inputBg: "color-mix(in srgb, var(--input, #e2e8f0) 20%, transparent)",
+  muted: "var(--muted, #f1f5f9)",
+  mutedFg: "var(--muted-foreground, #64748b)",
+  radiusMd: "var(--radius-md, 8px)",
+  radiusLg: "var(--radius-lg, 10px)",
+  ring: "color-mix(in srgb, var(--foreground, #020617) 10%, transparent)",
+} as const;
+
 function formatRangeBound(timestamp: number, spanMs: number): string {
   const fmt =
-    spanMs >= 365 * DAY_MS
+    spanMs > 365 * DAY_MS
       ? "MMM YYYY"
       : spanMs > 3 * DAY_MS
         ? "D MMM"
@@ -29,7 +46,6 @@ function formatRangeBound(timestamp: number, spanMs: number): string {
 }
 
 export function DateRangePicker({
-  tokens,
   value,
   onChange,
   now,
@@ -40,6 +56,7 @@ export function DateRangePicker({
   now: number;
 }) {
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const [range, setRange] = useState<DateRange | undefined>(() => ({
     from: dayjs(value.after).toDate(),
     to: dayjs(value.before).toDate(),
@@ -50,6 +67,20 @@ export function DateRangePicker({
       to: dayjs(value.before).toDate(),
     });
   }, [value]);
+
+  // Popover dismiss on outside click (matches base-ui popover behaviour).
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
 
   const spanMs = value.before - value.after;
 
@@ -80,72 +111,82 @@ export function DateRangePicker({
     setOpen(false);
   };
 
-  const cellStyle = {
-    width: 34,
-    height: 32,
+  const dayCell = {
+    width: 36,
+    height: 36,
     padding: 0,
-    fontSize: 12,
-    color: tokens.text,
+    fontSize: 14,
+    fontWeight: 400,
+    color: C.foreground,
     background: "transparent",
     border: "none",
-    borderRadius: 6,
+    borderRadius: C.radiusMd,
     cursor: "pointer",
   } as const;
 
+  const selectedCell = { background: C.primary, color: C.primaryFg } as const;
+
   return (
-    <div style={{ display: "inline-block" }}>
-      <button
-        type="button"
+    <div
+      ref={wrapRef}
+      style={{
+        position: "relative",
+        display: "inline-block",
+        width: 320,
+        maxWidth: "100%",
+      }}
+    >
+      {/* Trigger: InputGroup-style, two centred fields around an en-dash. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen((v) => !v)}
         style={{
-          background: tokens.panel,
-          color: tokens.text,
-          border: `1px solid ${tokens.border}`,
-          borderRadius: 6,
-          padding: "6px 10px",
-          fontSize: 13,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: 28,
+          width: "100%",
+          boxSizing: "border-box",
+          border: `1px solid ${C.input}`,
+          borderRadius: C.radiusMd,
+          background: C.inputBg,
+          color: C.foreground,
+          fontSize: 14,
           cursor: "pointer",
-          minWidth: 190,
-          textAlign: "center",
         }}
       >
-        {formatRangeBound(value.after, spanMs)} —{" "}
-        {formatRangeBound(value.before, spanMs)}
-      </button>
+        <span style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
+          {formatRangeBound(value.after, spanMs)}
+        </span>
+        <span style={{ color: C.mutedFg, fontSize: 12, padding: "0 6px" }}>
+          –
+        </span>
+        <span style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
+          {formatRangeBound(value.before, spanMs)}
+        </span>
+      </div>
 
       {open && (
-        <>
-          {/* Backdrop: dims the page and closes on click. Fixed so the
-              calendar never overflows the widget's box (no host scrollbars). */}
-          <div
-            onClick={() => setOpen(false)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.4)",
-              zIndex: 1000,
-            }}
-          />
-          {/* Centred calendar overlay. */}
-          <div
-            role="dialog"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: "fixed",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              zIndex: 1001,
-              maxHeight: "90vh",
-              overflowY: "auto",
-              background: tokens.bg,
-              color: tokens.text,
-              border: `1px solid ${tokens.border}`,
-              borderRadius: 8,
-              padding: 10,
-              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-            }}
-          >
+        <div
+          role="dialog"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            zIndex: 1000,
+            width: "auto",
+            background: C.popover,
+            color: C.foreground,
+            borderRadius: C.radiusLg,
+            padding: 10,
+            // ring-1 ring-foreground/10 + shadow-md
+            boxShadow: `0 0 0 1px ${C.ring}, 0 4px 6px -1px rgb(0 0 0/0.1), 0 2px 4px -2px rgb(0 0 0/0.1)`,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
           <DayPicker
             mode="range"
             selected={range}
@@ -153,42 +194,35 @@ export function DateRangePicker({
             defaultMonth={range?.from}
             numberOfMonths={1}
             styles={{
-              root: { margin: 0, color: tokens.text },
+              root: { margin: 0, color: C.foreground },
               caption_label: {
-                fontSize: 13,
-                fontWeight: 600,
-                color: tokens.text,
+                fontSize: 14,
+                fontWeight: 500,
+                color: C.foreground,
               },
-              nav: { color: tokens.text },
-              button_previous: { color: tokens.text, cursor: "pointer" },
-              button_next: { color: tokens.text, cursor: "pointer" },
-              chevron: { fill: tokens.text },
+              nav: { color: C.foreground },
+              button_previous: { color: C.mutedFg, cursor: "pointer" },
+              button_next: { color: C.mutedFg, cursor: "pointer" },
+              chevron: { fill: C.mutedFg },
               month_caption: { padding: "2px 0" },
               weekday: {
-                fontSize: 11,
-                color: tokens.subtext,
-                fontWeight: 500,
+                fontSize: 12.8,
+                color: C.mutedFg,
+                fontWeight: 400,
                 padding: 4,
               },
               day: { textAlign: "center" },
-              day_button: cellStyle,
-              today: { color: tokens.accent, fontWeight: 700 },
+              day_button: dayCell,
+              today: { background: C.muted, color: C.foreground },
             }}
             modifiersStyles={{
-              selected: { background: tokens.accent, color: tokens.accentText },
-              range_start: {
-                background: tokens.accent,
-                color: tokens.accentText,
-              },
-              range_end: {
-                background: tokens.accent,
-                color: tokens.accentText,
-              },
+              selected: selectedCell,
+              range_start: selectedCell,
+              range_end: selectedCell,
               range_middle: {
-                background: tokens.dark
-                  ? "rgba(59,130,246,0.25)"
-                  : "rgba(37,99,235,0.15)",
-                color: tokens.text,
+                background: C.muted,
+                color: C.foreground,
+                borderRadius: 0,
               },
             }}
           />
@@ -197,37 +231,54 @@ export function DateRangePicker({
             style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: 6,
-              borderTop: `1px solid ${tokens.border}`,
+              gap: 4,
+              borderTop: `1px solid ${C.input}`,
               paddingTop: 8,
-              marginTop: 4,
             }}
           >
             {PRESETS.map((preset) => (
-              <Button
+              <button
                 key={preset.key}
-                tokens={tokens}
-                variant="ghost"
+                type="button"
                 onClick={() => applyPreset(preset.key)}
-                style={{ flex: 1, minWidth: 56 }}
+                style={{
+                  flex: 1,
+                  minWidth: 56,
+                  height: 24,
+                  padding: "0 8px",
+                  fontSize: 12,
+                  background: "transparent",
+                  color: C.foreground,
+                  border: "none",
+                  borderRadius: C.radiusMd,
+                  cursor: "pointer",
+                }}
               >
                 {preset.label}
-              </Button>
+              </button>
             ))}
           </div>
 
-          <div style={{ marginTop: 8 }}>
-            <Button
-              tokens={tokens}
-              onClick={applyCustom}
-              disabled={!range?.from}
-              style={{ width: "100%" }}
-            >
-              Apply
-            </Button>
-          </div>
-          </div>
-        </>
+          <button
+            type="button"
+            onClick={applyCustom}
+            disabled={!range?.from}
+            style={{
+              width: "100%",
+              height: 36,
+              fontSize: 12,
+              fontWeight: 500,
+              background: C.primary,
+              color: C.primaryFg,
+              border: "none",
+              borderRadius: C.radiusMd,
+              cursor: range?.from ? "pointer" : "not-allowed",
+              opacity: range?.from ? 1 : 0.5,
+            }}
+          >
+            Apply
+          </button>
+        </div>
       )}
     </div>
   );
