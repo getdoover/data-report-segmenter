@@ -146,15 +146,22 @@ export function DateTimeInput({
   tokens,
   value,
   onChange,
+  min,
+  max,
 }: {
   tokens: ThemeTokens;
   value: string;
   onChange: (value: string) => void;
+  /** Optional bounds, as datetime-local strings (see toDatetimeLocalValue). */
+  min?: string;
+  max?: string;
 }) {
   return (
     <input
       type="datetime-local"
       value={value}
+      min={min}
+      max={max}
       onChange={(e) => onChange(e.target.value)}
       style={{
         background: tokens.panel,

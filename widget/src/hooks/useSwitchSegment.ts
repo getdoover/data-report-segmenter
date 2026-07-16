@@ -22,8 +22,12 @@ import { RPC_CHANNEL, type SwitchSegmentRequest } from "../lib/types.ts";
 const SAFETY_TIMEOUT_MS = 15000;
 
 export interface SwitchSegmentResult {
-  /** Fire a switch to `kind`. No-op client-side if it equals the current kind. */
-  switchTo: (kind: string) => void;
+  /**
+   * Fire a switch to `kind`. No-op client-side if it equals the current kind.
+   * `atTs` (epoch ms) backdates the switch instant — omit for "now". The
+   * processor clamps it to [current segment start, now].
+   */
+  switchTo: (kind: string, atTs?: number) => void;
   /** The kind we're waiting to see reflected, or null when idle. */
   pendingKind: string | null;
   /** True while a switch is in flight. */
@@ -67,7 +71,7 @@ export function useSwitchSegment(
   useEffect(() => () => clearPending(), [clearPending]);
 
   const switchTo = useCallback(
-    (kind: string) => {
+    (kind: string, atTs?: number) => {
       // Picking the current kind is a no-op client-side.
       if (kind === currentKind || kind === "") {
         return;
@@ -90,7 +94,10 @@ export function useSwitchSegment(
         .toString(36)
         .slice(2, 8)}`;
       rpc
-        .mutateAsync({ commandId, request: buildSwitchRequest(kind) })
+        .mutateAsync({
+          commandId,
+          request: buildSwitchRequest(kind, atTs ?? Date.now()),
+        })
         .catch((err: unknown) => {
           setError(errorMessage(err));
           clearPending();

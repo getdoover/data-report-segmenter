@@ -28,6 +28,7 @@ test("extractAppConfig reads the app block", () => {
     showNone: true,
     segmentsLabel: "Batch",
     showTimeline: true,
+    showAdd: true,
   });
 });
 
@@ -37,13 +38,24 @@ test("extractAppConfig returns defaults for missing/malformed data", () => {
     showNone: false,
     segmentsLabel: "Segment",
     showTimeline: true,
+    showAdd: true,
   });
   assert.deepEqual(extractAppConfig({ applications: {} }, "x"), {
     segmentKinds: [],
     showNone: false,
     segmentsLabel: "Segment",
     showTimeline: true,
+    showAdd: true,
   });
+});
+
+test("extractAppConfig hides add only on explicit false", () => {
+  assert.equal(
+    extractAppConfig({ applications: { a: { show_add_segment: false } } }, "a")
+      .showAdd,
+    false,
+  );
+  assert.equal(extractAppConfig({ applications: { a: {} } }, "a").showAdd, true);
 });
 
 test("extractAppConfig hides timeline only on explicit false", () => {

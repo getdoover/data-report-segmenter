@@ -44,6 +44,14 @@ class DataReportSegmenterConfig(config.Schema):
         default=True,
         description="Show the segment timeline Gantt chart + range selector in the widget.",
     )
+    show_add_segment = config.Boolean(
+        "Show Add Segment",
+        default=True,
+        description=(
+            "Offer the retroactive 'Add' tool in the widget menu, letting "
+            "operators label a past stretch of the timeline."
+        ),
+    )
 
     # --- processor plumbing ---------------------------------------------
     # dv_proc_subscriptions MUST include "dv-rpc" or no RPC (switch_segment /

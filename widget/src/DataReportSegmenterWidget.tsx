@@ -9,11 +9,7 @@ import { extractAppConfig, extractCurrentSegment } from "./lib/config.ts";
 import { deriveReportOptions, deriveSegmentOptions } from "./lib/options.ts";
 import { sortReportsDesc } from "./lib/reports.ts";
 import { resolveTheme } from "./lib/theme.ts";
-import {
-  CONTROL_BUTTON_WIDTH,
-  DEFAULT_APP_KEY,
-  type Timespan,
-} from "./lib/types.ts";
+import { DEFAULT_APP_KEY, type Timespan } from "./lib/types.ts";
 import { DEFAULT_FETCH_WINDOW_MS, defaultTimespan } from "./lib/timeline.ts";
 import { useSwitchSegment } from "./hooks/useSwitchSegment.ts";
 import { useGenerateReport } from "./hooks/useGenerateReport.ts";
@@ -25,7 +21,8 @@ import { TimelineSection } from "./components/TimelineSection.tsx";
 import { GenerateReportPanel } from "./components/GenerateReportPanel.tsx";
 import { AddSegmentPanel } from "./components/AddSegmentPanel.tsx";
 import { ReportList } from "./components/ReportList.tsx";
-import { Button, Card } from "./components/ui.tsx";
+import { HamburgerMenu, type MenuItem } from "./components/HamburgerMenu.tsx";
+import { Card } from "./components/ui.tsx";
 
 /**
  * Data Report Segmenter cloud widget.
@@ -145,6 +142,25 @@ function DataReportSegmenterInner({
   // deletes/recreates segment messages the live subscription can't reconcile).
   const adder = useAddSegment(agentId, appKey, history.refetch);
 
+  // Secondary actions live in the top-right hamburger menu. "Add" is gated by
+  // config (default on).
+  const menuItems: MenuItem[] = [
+    {
+      label: "Reports",
+      active: showReport,
+      onClick: () => setShowReport((v) => !v),
+    },
+    ...(config.showAdd
+      ? [
+          {
+            label: `Add ${config.segmentsLabel}`,
+            active: showAdd,
+            onClick: () => setShowAdd((v) => !v),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <Card tokens={tokens}>
       <SegmentHeader
@@ -158,7 +174,7 @@ function DataReportSegmenterInner({
         error={switcher.error}
         now={now}
         onSelect={switcher.switchTo}
-        compact={!config.showTimeline}
+        rightSlot={<HamburgerMenu tokens={tokens} items={menuItems} />}
       />
 
       {config.showTimeline && (
@@ -173,41 +189,11 @@ function DataReportSegmenterInner({
         />
       )}
 
-      {/* Reports + Add toggles: centred column, equal width. When the timeline
-          is hidden the top margin matches the inter-button gap so Change /
-          Reports / Add are evenly spaced (no orphan age-line gap). */}
-      <div
-        style={{
-          marginTop: config.showTimeline ? 12 : 8,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <Button
-          tokens={tokens}
-          variant="primary"
-          onClick={() => setShowReport((v) => !v)}
-          style={{ width: CONTROL_BUTTON_WIDTH }}
-        >
-          {showReport ? "Hide Reports" : "Reports"}
-        </Button>
-        <Button
-          tokens={tokens}
-          variant="primary"
-          onClick={() => setShowAdd((v) => !v)}
-          style={{ width: CONTROL_BUTTON_WIDTH }}
-        >
-          {showAdd ? `Hide Add` : `Add ${config.segmentsLabel}`}
-        </Button>
-      </div>
-
-      {/* Collapsible retroactive-add panel. */}
+      {/* Collapsible retroactive-add panel (opened from the hamburger menu). */}
       <div
         style={{
           display: "grid",
-          gridTemplateRows: showAdd ? "1fr" : "0fr",
+          gridTemplateRows: config.showAdd && showAdd ? "1fr" : "0fr",
           transition: "grid-template-rows 0.3s ease",
         }}
       >
