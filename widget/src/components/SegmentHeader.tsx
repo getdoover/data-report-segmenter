@@ -34,6 +34,7 @@ export function SegmentHeader({
   error,
   now,
   onSelect,
+  compact = false,
 }: {
   tokens: ThemeTokens;
   label: string;
@@ -45,6 +46,12 @@ export function SegmentHeader({
   error: string | null;
   now: number;
   onSelect: (kind: string) => void;
+  /**
+   * Tuck the segment age into the header row's right column instead of a
+   * separate row below. Used when the timeline chart is hidden so Change /
+   * Reports / Add sit evenly spaced with no orphan age-line gap.
+   */
+  compact?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>("");
@@ -69,6 +76,14 @@ export function SegmentHeader({
     // onSelect (switchTo) no-ops if the draft equals the current kind.
     onSelect(draft);
   };
+
+  const statusNode = switching ? (
+    <span>Switching…</span>
+  ) : startTs !== null ? (
+    <span title={formatAbsolute(startTs)}>{formatDuration(now - startTs)}</span>
+  ) : (
+    <span>default — no changes recorded yet</span>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -125,20 +140,26 @@ export function SegmentHeader({
           )}
         </div>
 
-        <div />
-      </div>
-
-      <div style={{ fontSize: 12, color: tokens.subtext, minHeight: 16 }}>
-        {switching ? (
-          <span>Switching…</span>
-        ) : startTs !== null ? (
-          <span title={formatAbsolute(startTs)}>
-            {formatDuration(now - startTs)}
-          </span>
+        {compact ? (
+          <div
+            style={{
+              justifySelf: "end",
+              fontSize: 12,
+              color: tokens.subtext,
+            }}
+          >
+            {statusNode}
+          </div>
         ) : (
-          <span>default — no changes recorded yet</span>
+          <div />
         )}
       </div>
+
+      {!compact && (
+        <div style={{ fontSize: 12, color: tokens.subtext, minHeight: 16 }}>
+          {statusNode}
+        </div>
+      )}
 
       {error !== null && (
         <div style={{ fontSize: 12, color: tokens.danger }}>{error}</div>

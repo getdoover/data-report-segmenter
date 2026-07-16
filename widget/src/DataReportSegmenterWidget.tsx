@@ -158,6 +158,7 @@ function DataReportSegmenterInner({
         error={switcher.error}
         now={now}
         onSelect={switcher.switchTo}
+        compact={!config.showTimeline}
       />
 
       {config.showTimeline && (
@@ -172,10 +173,12 @@ function DataReportSegmenterInner({
         />
       )}
 
-      {/* Reports + Add toggles: centred column, equal width. */}
+      {/* Reports + Add toggles: centred column, equal width. When the timeline
+          is hidden the top margin matches the inter-button gap so Change /
+          Reports / Add are evenly spaced (no orphan age-line gap). */}
       <div
         style={{
-          marginTop: 12,
+          marginTop: config.showTimeline ? 12 : 8,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
