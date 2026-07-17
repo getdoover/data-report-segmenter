@@ -90,7 +90,7 @@ function DataReportSegmenterInner({
     [ui_element_props?.theme, prefersDark],
   );
 
-  const { data: deploymentConfig } = useAgentChannel(
+  const { data: deploymentConfig, isLoading: configLoading } = useAgentChannel(
     agentId,
     "deployment_config",
   );
@@ -160,6 +160,29 @@ function DataReportSegmenterInner({
         ]
       : []),
   ];
+
+  // Hold the config-dependent layout until deployment_config lands. Until it
+  // does, extractAppConfig can only return defaults (show_timeline_chart
+  // defaults ON), so a graph-off install would render the timeline and then
+  // yank it away once the real config arrived — a visible flash. Rendering a
+  // neutral placeholder for that beat means we never show the wrong layout.
+  // If there's no agent context, or the fetch settled (even in error), fall
+  // through and render with whatever config we have.
+  if (Boolean(agentId) && configLoading && deploymentConfig === undefined) {
+    return (
+      <Card
+        tokens={tokens}
+        style={{
+          minHeight: 200,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <span style={{ fontSize: 12, color: tokens.subtext }}>Loading…</span>
+      </Card>
+    );
+  }
 
   return (
     <Card
