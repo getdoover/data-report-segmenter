@@ -23,3 +23,6 @@ widget/assets/
 # OS
 .DS_Store
 widget/dist/
+
+# Claude Code personal settings
+.claude/settings.local.json
