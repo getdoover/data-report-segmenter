@@ -162,7 +162,24 @@ function DataReportSegmenterInner({
   ];
 
   return (
-    <Card tokens={tokens}>
+    <Card
+      tokens={tokens}
+      // With the timeline hidden the card is barely taller than its header, so
+      // the hamburger's drop-down would spill past the bottom edge and the host
+      // grows a scrollbar. Reserve enough height for the open menu and centre
+      // the header (and so the Change button) vertically in it. With the
+      // timeline shown the card is already tall enough.
+      style={
+        config.showTimeline
+          ? undefined
+          : {
+              minHeight: 200,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+            }
+      }
+    >
       <SegmentHeader
         tokens={tokens}
         label={config.segmentsLabel}
