@@ -145,7 +145,11 @@ def paint_segment(
     e = min(int(end), tn)
     if s >= e:
         return [
-            {"kind": seg["kind"], "start_ts": int(seg["start_ts"]), "end_ts": int(seg["end_ts"])}
+            {
+                "kind": seg["kind"],
+                "start_ts": int(seg["start_ts"]),
+                "end_ts": int(seg["end_ts"]),
+            }
             for seg in timeline
         ]
 

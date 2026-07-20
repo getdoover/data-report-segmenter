@@ -283,9 +283,7 @@ def test_paint_inserts_new_kind_truncating_neighbours():
 
 def test_paint_into_open_segment_splits_it():
     # open segment None(50-100=now); paint A over (60-80) -> tail None stays open.
-    out = seg.paint_segment(
-        _tl(("B", 0, 50), ("None", 50, 100)), 60, 80, "A", 100
-    )
+    out = seg.paint_segment(_tl(("B", 0, 50), ("None", 50, 100)), 60, 80, "A", 100)
     assert out == _tl(("B", 0, 50), ("None", 50, 60), ("A", 60, 80), ("None", 80, 100))
     assert out[-1]["end_ts"] == 100  # last segment is the new open one
 
