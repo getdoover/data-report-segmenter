@@ -312,7 +312,9 @@ class DataReportSegmenterApp(Application):
             }
             if author_id is not None:
                 record["author_id"] = author_id
-            await self.api.create_message(TAG_VALUES_CHANNEL, record, timestamp=int(end))
+            await self.api.create_message(
+                TAG_VALUES_CHANNEL, record, timestamp=int(end)
+            )
             changed = True
 
         # Update the open-segment pointer if it moved.
@@ -404,7 +406,9 @@ class DataReportSegmenterApp(Application):
 
         try:
             windows, rows, var_refs = await self._build_report(kind, start_ts, end_ts)
-            csv_bytes = report_lib.render_csv(var_refs, rows)
+            csv_bytes = report_lib.render_csv(
+                var_refs, rows, segment_label=self.config.segments_label.value
+            )
             filename = report_lib.build_report_filename(
                 APP_NAME, kind, start_ts, end_ts
             )

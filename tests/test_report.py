@@ -24,6 +24,7 @@ UI_STATE = {
                     "flow_rate": {
                         "type": "uiVariable",
                         "varType": "float",
+                        "displayString": "Flow Rate",
                         "currentValue": "$tag.app().value:number:null",
                     },
                     "pump_block": {
@@ -32,6 +33,7 @@ UI_STATE = {
                             "pressure": {
                                 "type": "uiVariable",
                                 "varType": "float",
+                                # no displayString -> header falls back to the key
                                 "currentValue": "$tag.app().pressure:number:0",
                             }
                         },
@@ -44,6 +46,7 @@ UI_STATE = {
                     "level_count": {
                         "type": "uiVariable",
                         "varType": "integer",
+                        "displayString": "Level Count",
                         "currentValue": "$tag.app().count:number:0",
                     },
                     "status_text": {
@@ -114,6 +117,16 @@ def test_walk_resolves_tag_paths():
     assert by_col["level_sensor_1.level_count"] == ("level_sensor_1", "count")
 
 
+def test_walk_uses_displaystring_as_label_with_key_fallback():
+    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    by_col = {r.column: r.label for r in refs}
+    # The header is the human displayString the operator reads in the widget...
+    assert by_col["flow_sensor_1.flow_rate"] == "Flow Rate"
+    assert by_col["level_sensor_1.level_count"] == "Level Count"
+    # ...falling back to the variable's own key when it has no displayString.
+    assert by_col["flow_sensor_1.pump_block.pressure"] == "pressure"
+
+
 def test_walk_skips_literal_currentvalue():
     # A numeric var whose currentValue is a literal (not a $tag ref) has no
     # tag history to follow -> excluded (tag-reference-native).
@@ -158,8 +171,7 @@ def test_parse_tag_ref_non_references():
 
 def test_get_by_keys():
     assert (
-        report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1",))
-        is TAG_MSG["flow_sensor_1"]
+        report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1",)) is TAG_MSG["flow_sensor_1"]
     )
     assert report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1", "value")) == 12.5
     assert report_lib.get_by_keys(TAG_MSG, ("flow_sensor_1", "nope")) is None
@@ -195,19 +207,24 @@ def test_extract_row_values_diff_message_partial():
 
 
 def test_extract_row_values_missing_message_fields():
-    refs = [VariableRef("a.b", ("a", "b"))]
+    refs = [VariableRef("a.b", "B", ("a", "b"))]
     assert report_lib.extract_row_values({"other": {"x": 1}}, refs) == {}
 
 
 # --- CSV assembly --------------------------------------------------------
 
 
-def _refs(*cols):
-    return [VariableRef(c, ("app", c)) for c in cols]
+def _refs(*specs):
+    # Each spec is a (column, label) pair, or a bare column (label == column).
+    out = []
+    for spec in specs:
+        col, label = spec if isinstance(spec, tuple) else (spec, spec)
+        out.append(VariableRef(col, label, ("app", col)))
+    return out
 
 
-def test_render_csv_header_and_ordering():
-    refs = _refs("app.x", "app.y")
+def test_render_csv_header_is_friendly_labels_and_ordering():
+    refs = _refs(("app.x", "Flow Rate"), ("app.y", "Tank Level"))
     rows = [
         {
             "timestamp_utc": "2026-01-02T00:00:00+00:00",
@@ -220,16 +237,40 @@ def test_render_csv_header_and_ordering():
             "values": {"app.x": 1, "app.y": 10},
         },
     ]
-    out = report_lib.render_csv(refs, rows).decode("utf-8")
+    out = report_lib.render_csv(refs, rows, segment_label="Pipeline").decode("utf-8")
     lines = out.splitlines()
-    assert lines[0] == "timestamp_utc,segment_kind,app.x,app.y"
+    # human headers: friendly timestamp, the configured segment label, and each
+    # variable's displayString (never the internal <app_key>.<var> column key).
+    assert lines[0] == "Timestamp (UTC),Pipeline,Flow Rate,Tank Level"
     # rows sorted ascending by timestamp
     assert lines[1].startswith("2026-01-01T00:00:00+00:00,A,1,10")
     assert lines[2].startswith("2026-01-02T00:00:00+00:00,A,2,20")
 
 
+def test_render_csv_segment_label_defaults_to_segment():
+    out = report_lib.render_csv(_refs(("app.x", "Flow Rate")), []).decode("utf-8")
+    assert out.splitlines() == ["Timestamp (UTC),Segment,Flow Rate"]
+
+
+def test_render_csv_duplicate_labels_stay_data_correct():
+    # Two distinct columns sharing a display name: the header repeats the label,
+    # but each cell still maps by the unique internal column key, not the label.
+    refs = _refs(("a.flow", "Flow"), ("b.flow", "Flow"))
+    rows = [
+        {
+            "timestamp_utc": "2026-01-01T00:00:00+00:00",
+            "segment_kind": "A",
+            "values": {"a.flow": 1, "b.flow": 2},
+        },
+    ]
+    out = report_lib.render_csv(refs, rows, segment_label="Pipeline").decode("utf-8")
+    lines = out.splitlines()
+    assert lines[0] == "Timestamp (UTC),Pipeline,Flow,Flow"
+    assert lines[1] == "2026-01-01T00:00:00+00:00,A,1,2"
+
+
 def test_render_csv_sparse_cells_blank():
-    refs = _refs("app.x", "app.y")
+    refs = _refs(("app.x", "Flow Rate"), ("app.y", "Tank Level"))
     rows = [
         {
             "timestamp_utc": "2026-01-01T00:00:00+00:00",
@@ -240,12 +281,6 @@ def test_render_csv_sparse_cells_blank():
     out = report_lib.render_csv(refs, rows).decode("utf-8")
     # trailing empty cell for the missing app.y
     assert out.splitlines()[1] == "2026-01-01T00:00:00+00:00,A,1,"
-
-
-def test_render_csv_no_rows():
-    refs = _refs("app.x")
-    out = report_lib.render_csv(refs, []).decode("utf-8")
-    assert out.splitlines() == ["timestamp_utc,segment_kind,app.x"]
 
 
 # --- filename ------------------------------------------------------------

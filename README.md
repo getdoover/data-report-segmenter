@@ -129,8 +129,11 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
     values are non-numeric, the true history lives in `tag_values` messages
     (`<app_key>.<tag>`). v1 keeps only literal numerics; the tag_values fallback
     is deferred to the verification phase.
-- **CSV** (stdlib `csv`): header `timestamp_utc,segment_kind,<app_key>.<var>,…`;
-  one row per contributing ui_state message (sparse cells blank); ascending;
+- **CSV** (stdlib `csv`): header `Timestamp (UTC),<Segments Label>,<var
+  displayString>,…` — the labels the operator reads in the widget, not machine
+  ids (column *order* and value-matching still key off the internal
+  `<app_key>.<var>` reference, so duplicate display names stay data-correct).
+  One row per contributing ui_state message (sparse cells blank); ascending;
   windows concatenated. Filename
   `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised.
 

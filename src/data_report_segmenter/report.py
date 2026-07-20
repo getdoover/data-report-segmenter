@@ -22,7 +22,12 @@ _TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
 class VariableRef(NamedTuple):
     """A NumericVariable discovered in ui_state, resolved to its tag source.
 
-    - ``column`` is the CSV header for this variable: ``<app_key>.<var...>``.
+    - ``column`` is the internal, unique key for this variable
+      (``<app_key>.<var...>``): it keys the extracted value map and fixes the
+      CSV column *order*, but is never shown to the user.
+    - ``label`` is the human CSV header — the variable's ui ``displayString``
+      (exactly what the operator reads in the widget), falling back to the
+      variable's own key when it carries no displayString.
     - ``path`` is the key path into a ``tag_values`` message/aggregate where
       the value actually lives, e.g. ``("4_20ma_sensor_1", "value")``.
       ui_state carries only the *reference* ($tag...) to this location, never
@@ -30,6 +35,7 @@ class VariableRef(NamedTuple):
     """
 
     column: str
+    label: str
     path: tuple[str, ...]
 
 
@@ -79,7 +85,15 @@ def _walk_children(
             # tag_values location that actually carries the value history.
             path = parse_tag_ref(node.get("currentValue"), context_app_key)
             if path is not None:
-                out.append(VariableRef(column=column, path=path))
+                # The header is the variable's human displayString (what the
+                # operator sees in the widget); fall back to its key if unset.
+                display = node.get("displayString")
+                label = (
+                    display.strip()
+                    if isinstance(display, str) and display.strip()
+                    else name
+                )
+                out.append(VariableRef(column=column, label=label, path=path))
         # Recurse into submodules / containers regardless of this node's type;
         # app() still resolves to the owning application, so context is stable.
         grandchildren = node.get("children")
@@ -203,16 +217,24 @@ def next_page_cursor(
     return oldest
 
 
-def render_csv(var_refs: list[VariableRef], rows: list[dict]) -> bytes:
+def render_csv(
+    var_refs: list[VariableRef], rows: list[dict], segment_label: str = "Segment"
+) -> bytes:
     """Render report rows to CSV bytes with the stdlib csv module.
 
-    Header: ``timestamp_utc,segment_kind,<col>,...`` in ``var_refs`` order.
+    Headers are the labels the operator reads in the widget, not machine ids:
+    ``Timestamp (UTC),<segment_label>,<var label>,...``, where each data-column
+    header is a variable's ``VariableRef.label`` (its ui displayString) and
+    ``segment_label`` is the app's configured Segments Label. Column *order*
+    and value matching still key off ``VariableRef.column`` internally, so
+    duplicate display names stay data-correct (only the header repeats).
+
     Each row dict is ``{"timestamp_utc": str, "segment_kind": str,
-    "values": {col: number}}``. Rows are emitted in ascending timestamp
+    "values": {column: number}}``. Rows are emitted in ascending timestamp
     order; missing cells render blank.
     """
     columns = [ref.column for ref in var_refs]
-    header = ["timestamp_utc", "segment_kind", *columns]
+    header = ["Timestamp (UTC)", segment_label, *(ref.label for ref in var_refs)]
 
     ordered = sorted(rows, key=lambda r: r["timestamp_utc"])
 
