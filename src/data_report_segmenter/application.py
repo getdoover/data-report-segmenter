@@ -406,8 +406,12 @@ class DataReportSegmenterApp(Application):
 
         try:
             windows, rows, var_refs = await self._build_report(kind, start_ts, end_ts)
+            summary = await self._volume_summary_rows()
             csv_bytes = report_lib.render_csv(
-                var_refs, rows, segment_label=self.config.segments_label.value
+                var_refs,
+                rows,
+                segment_label=self.config.segments_label.value,
+                summary=summary,
             )
             filename = report_lib.build_report_filename(
                 APP_NAME, kind, start_ts, end_ts
@@ -442,6 +446,22 @@ class DataReportSegmenterApp(Application):
         return {"message_id": job_id, "channel": REPORTS_CHANNEL}
 
     # -- report engine (impure orchestration around pure report_lib) --------
+
+    async def _volume_summary_rows(self) -> list[tuple[str, object]] | None:
+        """All-time volume summary rows for the report, or None if unavailable.
+
+        Reads the shared tag_values aggregate and summarises any upstream app
+        publishing the volume-totals convention (total_volume +
+        segment_totals_json; see report.discover_volume_totals). Returns None
+        when nothing qualifies, so the CSV omits the block entirely. The
+        breakdown lists every configured kind plus "None".
+        """
+        aggregate = await self.api.fetch_channel_aggregate(TAG_VALUES_CHANNEL)
+        grand, per_kind = report_lib.discover_volume_totals(aggregate.data or {})
+        if grand is None and not per_kind:
+            return None
+        kinds = self._segment_kinds() + [seg.NONE_KIND]
+        return report_lib.build_volume_summary(grand, per_kind, kinds)
 
     async def _build_report(self, kind, start_ts, end_ts):
         current = await self._current_segment()

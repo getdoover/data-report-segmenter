@@ -136,6 +136,17 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
   One row per contributing ui_state message (sparse cells blank); ascending;
   windows concatenated. Filename
   `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised.
+- **All-time volume summary block** (optional, prepended above the table with a
+  blank separator row): a two-column `label,value` block giving the grand total
+  volume and a per-pipeline breakdown (every configured kind + "None", `0.0`
+  where a kind has no volume yet). These are **all-time cumulative** figures, not
+  scoped to the report's date range. Source is a convention, not config: the
+  report scans `tag_values` for any app publishing a running `total_volume`
+  (grand) and a `segment_totals_json` object (`{kind: cumulative volume}`), and
+  sums across apps if more than one qualifies (`report.discover_volume_totals`).
+  When no app follows the convention the block is omitted and the CSV is
+  table-only. (The Petronash "Chemical Skid" processor publishes both, so its
+  reports carry the summary automatically.)
 
 ### `segment_reports` job lifecycle
 

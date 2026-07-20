@@ -283,6 +283,98 @@ def test_render_csv_sparse_cells_blank():
     assert out.splitlines()[1] == "2026-01-01T00:00:00+00:00,A,1,"
 
 
+# --- volume summary ------------------------------------------------------
+
+
+def test_discover_volume_totals_single_app():
+    data = {
+        "offline_petronash_processor_1": {
+            "total_volume": 180.42,
+            "segment_totals_json": '{"None": 134.3, "Pipeline A": 46.12}',
+            "flow_value": 12.5,
+        },
+        "some_other_app": {"value": 5},  # no segment_totals_json -> ignored
+    }
+    grand, per_kind = report_lib.discover_volume_totals(data)
+    assert grand == 180.42
+    assert per_kind == {"None": 134.3, "Pipeline A": 46.12}
+
+
+def test_discover_volume_totals_sums_across_apps():
+    data = {
+        "skid_1": {
+            "total_volume": 100.0,
+            "segment_totals_json": '{"Pipeline A": 60.0, "None": 40.0}',
+        },
+        "skid_2": {
+            "total_volume": 20.0,
+            "segment_totals_json": '{"Pipeline A": 15.0, "Pipeline B": 5.0}',
+        },
+    }
+    grand, per_kind = report_lib.discover_volume_totals(data)
+    assert grand == 120.0
+    assert per_kind == {"Pipeline A": 75.0, "Pipeline B": 5.0, "None": 40.0}
+
+
+def test_discover_volume_totals_none_and_junk():
+    assert report_lib.discover_volume_totals({}) == (None, {})
+    # segment_totals_json present but unparseable, and no total_volume
+    assert report_lib.discover_volume_totals({"app": {"segment_totals_json": "x"}}) == (
+        None,
+        {},
+    )
+    # non-numeric per-kind values are skipped
+    data = {"app": {"segment_totals_json": '{"Pipeline A": "x", "Pipeline B": 3}'}}
+    grand, per_kind = report_lib.discover_volume_totals(data)
+    assert grand is None
+    assert per_kind == {"Pipeline B": 3}
+
+
+def test_build_volume_summary_lists_all_kinds_with_zero_fallback():
+    rows = report_lib.build_volume_summary(
+        180.42,
+        {"None": 134.3, "Pipeline A": 46.12},
+        ["Pipeline A", "Pipeline B", "Pipeline C", "None"],
+    )
+    assert rows == [
+        ("Grand Total Volume (all-time)", 180.42),
+        ("Pipeline A (all-time)", 46.12),
+        ("Pipeline B (all-time)", 0.0),  # no data yet -> 0.0, still listed
+        ("Pipeline C (all-time)", 0.0),
+        ("None (all-time)", 134.3),
+    ]
+
+
+def test_build_volume_summary_blank_grand_when_absent():
+    rows = report_lib.build_volume_summary(None, {}, ["Pipeline A", "None"])
+    assert rows[0] == ("Grand Total Volume (all-time)", "")
+    assert rows[1] == ("Pipeline A (all-time)", 0.0)
+
+
+def test_render_csv_summary_block_precedes_table():
+    refs = _refs(("app.x", "Flow"))
+    rows = [
+        {
+            "timestamp_utc": "2026-01-01T00:00:00+00:00",
+            "segment_kind": "Pipeline A",
+            "values": {"app.x": 1},
+        }
+    ]
+    summary = [
+        ("Grand Total Volume (all-time)", 180.42),
+        ("Pipeline A (all-time)", 46.12),
+    ]
+    out = report_lib.render_csv(
+        refs, rows, segment_label="Pipeline", summary=summary
+    ).decode("utf-8")
+    lines = out.splitlines()
+    assert lines[0] == "Grand Total Volume (all-time),180.42"
+    assert lines[1] == "Pipeline A (all-time),46.12"
+    assert lines[2] == ""  # blank separator between summary and table
+    assert lines[3] == "Timestamp (UTC),Pipeline,Flow"
+    assert lines[4] == "2026-01-01T00:00:00+00:00,Pipeline A,1"
+
+
 # --- filename ------------------------------------------------------------
 
 

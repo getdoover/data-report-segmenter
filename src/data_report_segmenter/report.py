@@ -11,12 +11,21 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 from datetime import datetime, timezone
 from typing import NamedTuple
 
 NUMERIC_VAR_TYPES = ("float", "integer")
 _TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
+
+# Convention for the all-time volume summary block: an upstream app (e.g. a
+# per-segment volume totaliser) publishes a running grand total under
+# VOLUME_TOTAL_KEY and a JSON object mapping segment kind -> cumulative volume
+# under SEGMENT_TOTALS_KEY. A report scans tag_values for any app carrying both
+# and summarises them (see discover_volume_totals).
+VOLUME_TOTAL_KEY = "total_volume"
+SEGMENT_TOTALS_KEY = "segment_totals_json"
 
 
 class VariableRef(NamedTuple):
@@ -218,16 +227,24 @@ def next_page_cursor(
 
 
 def render_csv(
-    var_refs: list[VariableRef], rows: list[dict], segment_label: str = "Segment"
+    var_refs: list[VariableRef],
+    rows: list[dict],
+    segment_label: str = "Segment",
+    summary: list[tuple[str, object]] | None = None,
 ) -> bytes:
     """Render report rows to CSV bytes with the stdlib csv module.
 
-    Headers are the labels the operator reads in the widget, not machine ids:
-    ``Timestamp (UTC),<segment_label>,<var label>,...``, where each data-column
-    header is a variable's ``VariableRef.label`` (its ui displayString) and
-    ``segment_label`` is the app's configured Segments Label. Column *order*
-    and value matching still key off ``VariableRef.column`` internally, so
-    duplicate display names stay data-correct (only the header repeats).
+    When ``summary`` is given (a list of ``(label, value)`` rows, e.g. the
+    all-time volume totals), it is written first as a two-column block followed
+    by a blank separator row, then the time-series table.
+
+    Time-series headers are the labels the operator reads in the widget, not
+    machine ids: ``Timestamp (UTC),<segment_label>,<var label>,...``, where each
+    data-column header is a variable's ``VariableRef.label`` (its ui
+    displayString) and ``segment_label`` is the app's configured Segments Label.
+    Column *order* and value matching still key off ``VariableRef.column``
+    internally, so duplicate display names stay data-correct (only the header
+    repeats).
 
     Each row dict is ``{"timestamp_utc": str, "segment_kind": str,
     "values": {column: number}}``. Rows are emitted in ascending timestamp
@@ -240,6 +257,10 @@ def render_csv(
 
     buf = io.StringIO(newline="")
     writer = csv.writer(buf)
+    if summary:
+        for label, value in summary:
+            writer.writerow([label, "" if value is None else value])
+        writer.writerow([])  # blank row separating the summary from the table
     writer.writerow(header)
     for row in ordered:
         values = row.get("values", {})
@@ -250,6 +271,70 @@ def render_csv(
         writer.writerow(line)
 
     return buf.getvalue().encode("utf-8")
+
+
+def _parse_json_object(raw) -> dict:
+    """``json.loads`` ``raw`` iff it yields a dict, else ``{}`` (junk-tolerant)."""
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def discover_volume_totals(
+    tag_values_data: dict,
+) -> tuple[float | None, dict[str, float]]:
+    """Grand + per-kind volume totals discovered in a ``tag_values`` aggregate.
+
+    Convention (see VOLUME_TOTAL_KEY / SEGMENT_TOTALS_KEY): an upstream app
+    publishes a running ``total_volume`` (the grand total) and a
+    ``segment_totals_json`` object mapping segment kind -> its cumulative
+    volume. Every app block carrying ``segment_totals_json`` contributes; values
+    sum across apps when more than one qualifies (e.g. multiple skids on a
+    device). Returns ``(grand_or_None, {kind: volume})``; non-numeric/absent
+    values are skipped, and grand is None when no block carries a numeric
+    ``total_volume``.
+    """
+    grand: float | None = None
+    per_kind: dict[str, float] = {}
+    if not isinstance(tag_values_data, dict):
+        return grand, per_kind
+    for block in tag_values_data.values():
+        if not isinstance(block, dict) or SEGMENT_TOTALS_KEY not in block:
+            continue
+        total = block.get(VOLUME_TOTAL_KEY)
+        if is_numeric(total):
+            grand = total if grand is None else grand + total
+        for kind, vol in _parse_json_object(block.get(SEGMENT_TOTALS_KEY)).items():
+            if is_numeric(vol):
+                per_kind[kind] = per_kind.get(kind, 0.0) + vol
+    return grand, per_kind
+
+
+def build_volume_summary(
+    grand, per_kind: dict, kinds: list[str]
+) -> list[tuple[str, object]]:
+    """Summary rows ``(label, value)`` for the all-time volume block.
+
+    One row for the grand total, then one per ``kind`` in order, each reading
+    ``per_kind`` and rendering ``0.0`` when a kind has accrued no volume yet. A
+    non-numeric/absent grand total renders blank. ``kinds`` is the caller's
+    ordered kind list (configured kinds + "None"), so the breakdown lists every
+    pipeline regardless of whether it has data yet.
+    """
+    totals = per_kind if isinstance(per_kind, dict) else {}
+    rows: list[tuple[str, object]] = [
+        ("Grand Total Volume (all-time)", grand if is_numeric(grand) else "")
+    ]
+    for kind in kinds:
+        vol = totals.get(kind)
+        rows.append((f"{kind} (all-time)", vol if is_numeric(vol) else 0.0))
+    return rows
 
 
 def _sanitize(part: str) -> str:
