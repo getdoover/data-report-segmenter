@@ -137,6 +137,14 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
   windows concatenated. Numeric values (data cells and summary) are rounded to
   2 decimal places. Filename
   `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised.
+- **Pipeline-scoped total column**: when the totaliser convention is present
+  (an app publishing `total_volume` + `segment_totals_json`), the grand
+  `total_volume` column is replaced by a **`Pipeline Total Volume`** column — a
+  running total scoped to *this report's* kind, read from
+  `segment_totals_json[kind]` (`report.find_total_volume_ref` /
+  `pipeline_total_value`). Devices without the convention keep their plain
+  `total_volume` column unchanged. (The grand total still appears in the
+  all-time summary block above.)
 - **All-time volume summary block** (optional, prepended above the table with a
   blank separator row): a two-column `label,value` block giving the grand total
   volume and a per-pipeline breakdown (every configured kind + "None", `0.0`

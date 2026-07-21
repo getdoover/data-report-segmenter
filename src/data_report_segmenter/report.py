@@ -27,6 +27,12 @@ _TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
 VOLUME_TOTAL_KEY = "total_volume"
 SEGMENT_TOTALS_KEY = "segment_totals_json"
 
+# Synthetic column that replaces the grand-total ``total_volume`` column in a
+# per-pipeline report: a running total scoped to the report's own kind, read
+# from segment_totals_json (see find_total_volume_ref / pipeline_total_value).
+PIPELINE_TOTAL_COL = "__pipeline_total__"
+PIPELINE_TOTAL_LABEL = "Pipeline Total Volume"
+
 
 class VariableRef(NamedTuple):
     """A NumericVariable discovered in ui_state, resolved to its tag source.
@@ -346,6 +352,39 @@ def build_volume_summary(
         vol = totals.get(kind)
         rows.append((f"{kind} (all-time)", vol if is_numeric(vol) else 0.0))
     return rows
+
+
+def find_total_volume_ref(var_refs: list[VariableRef]) -> VariableRef | None:
+    """The discovered variable for the grand running totaliser, or None.
+
+    That is the numeric variable whose tag key is ``total_volume`` — the grand
+    cumulative across all pipelines. In a per-pipeline report its column is
+    swapped for a pipeline-scoped running total (see pipeline_total_value), but
+    only when the source app also publishes ``segment_totals_json``; otherwise
+    the grand-total column is left as the caller found it.
+    """
+    for ref in var_refs:
+        if ref.path and ref.path[-1] == VOLUME_TOTAL_KEY:
+            return ref
+    return None
+
+
+def pipeline_total_value(message_data: dict, app_key: str, kind: str):
+    """This message's cumulative volume for ``kind``, from segment_totals_json.
+
+    Reads ``message_data[app_key][segment_totals_json]`` — the per-kind
+    cumulative the totaliser publishes alongside ``total_volume`` — and returns
+    the value for ``kind`` (0.0 when the kind has accrued nothing yet), or None
+    when this (diff) message doesn't carry ``segment_totals_json`` so the cell
+    stays blank, exactly as the grand-total cell did on such messages.
+    """
+    if not isinstance(message_data, dict):
+        return None
+    block = message_data.get(app_key)
+    if not isinstance(block, dict) or SEGMENT_TOTALS_KEY not in block:
+        return None
+    value = _parse_json_object(block.get(SEGMENT_TOTALS_KEY)).get(kind)
+    return value if is_numeric(value) else 0.0
 
 
 def _sanitize(part: str) -> str:

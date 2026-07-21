@@ -387,6 +387,57 @@ def test_render_csv_summary_blank_grand_renders_empty():
     assert lines[1] == "Pipeline A (all-time),0.00"
 
 
+# --- pipeline-total column (per-pipeline running total) ------------------
+
+
+def test_find_total_volume_ref():
+    refs = [
+        VariableRef("app.flow", "Flow", ("app", "flow_value")),
+        VariableRef("app.total", "Total Volume Pumped", ("app", "total_volume")),
+    ]
+    assert report_lib.find_total_volume_ref(refs) is refs[1]
+    assert report_lib.find_total_volume_ref(refs[:1]) is None
+
+
+def test_pipeline_total_value_reads_kind_from_segment_totals_json():
+    msg = {
+        "skid": {
+            "flow_value": 12.5,
+            "segment_totals_json": '{"None": 134.3, "Pipeline A": 46.12}',
+        }
+    }
+    assert report_lib.pipeline_total_value(msg, "skid", "Pipeline A") == 46.12
+    # a kind present in the block but with no volume yet -> 0.0
+    assert report_lib.pipeline_total_value(msg, "skid", "Pipeline B") == 0.0
+
+
+def test_pipeline_total_value_absent_returns_none():
+    # message without segment_totals_json (a diff that didn't move it) -> blank
+    assert (
+        report_lib.pipeline_total_value({"skid": {"flow_value": 1}}, "skid", "A")
+        is None
+    )
+    assert report_lib.pipeline_total_value({}, "skid", "A") is None
+
+
+def test_render_csv_includes_pipeline_total_column():
+    refs = [
+        VariableRef("app.flow", "Flow", ("app", "flow_value")),
+        VariableRef(report_lib.PIPELINE_TOTAL_COL, report_lib.PIPELINE_TOTAL_LABEL, ()),
+    ]
+    rows = [
+        {
+            "timestamp_utc": "2026-01-01T00:00:00+00:00",
+            "segment_kind": "Pipeline A",
+            "values": {"app.flow": 12.5, report_lib.PIPELINE_TOTAL_COL: 46.127},
+        }
+    ]
+    out = report_lib.render_csv(refs, rows, segment_label="Pipeline").decode("utf-8")
+    lines = out.splitlines()
+    assert lines[0] == "Timestamp (UTC),Pipeline,Flow,Pipeline Total Volume"
+    assert lines[1] == "2026-01-01T00:00:00+00:00,Pipeline A,12.50,46.13"
+
+
 # --- filename ------------------------------------------------------------
 
 

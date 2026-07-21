@@ -473,18 +473,44 @@ class DataReportSegmenterApp(Application):
         # tag_values location holding the actual value history.
         ui_state = await self.api.fetch_channel_aggregate(UI_STATE_CHANNEL)
         var_refs = report_lib.walk_numeric_variables(ui_state.data or {}, self.app_key)
+
+        # In a per-pipeline report the grand-total (all-pipelines) total_volume
+        # column is swapped for a running total scoped to THIS report's kind,
+        # read from segment_totals_json — but only when the totaliser app
+        # actually publishes it, so generic devices keep their total_volume.
+        pipeline_total = None
+        total_ref = report_lib.find_total_volume_ref(var_refs)
+        if total_ref is not None:
+            tag_values = await self.api.fetch_channel_aggregate(TAG_VALUES_CHANNEL)
+            block = (tag_values.data or {}).get(total_ref.path[0]) or {}
+            if report_lib.SEGMENT_TOTALS_KEY in block:
+                var_refs = [r for r in var_refs if r is not total_ref]
+                pipeline_total = (report_lib.PIPELINE_TOTAL_COL, total_ref.path[0])
+
         # tag_values messages are keyed by app_key at the top level; restrict
-        # history reads to the app_keys our variables actually live under.
-        source_app_keys = sorted({ref.path[0] for ref in var_refs if ref.path})
+        # history reads to the app_keys our variables actually live under (plus
+        # the totaliser app when a pipeline-total column is in play).
+        source_app_keys = set(ref.path[0] for ref in var_refs if ref.path)
+        if pipeline_total is not None:
+            source_app_keys.add(pipeline_total[1])
+        source_app_keys = sorted(source_app_keys)
 
         rows: list[dict] = []
         for win_start, win_end in windows:
             rows.extend(
                 await self._collect_window_rows(
-                    win_start, win_end, kind, var_refs, source_app_keys
+                    win_start, win_end, kind, var_refs, source_app_keys, pipeline_total
                 )
             )
-        return windows, rows, var_refs
+
+        report_refs = list(var_refs)
+        if pipeline_total is not None:
+            report_refs.append(
+                report_lib.VariableRef(
+                    report_lib.PIPELINE_TOTAL_COL, report_lib.PIPELINE_TOTAL_LABEL, ()
+                )
+            )
+        return windows, rows, report_refs
 
     async def _fetch_closed_segments(self, start_ts, end_ts) -> list[dict]:
         """All closed-segment records overlapping [start_ts, end_ts].
@@ -569,7 +595,13 @@ class DataReportSegmenterApp(Application):
         return segments
 
     async def _collect_window_rows(
-        self, win_start: int, win_end: int, kind, var_refs, field_names
+        self,
+        win_start: int,
+        win_end: int,
+        kind,
+        var_refs,
+        field_names,
+        pipeline_total=None,
     ) -> list[dict]:
         """tag_values value rows in the window (win_start, win_end], epoch-ms.
 
@@ -579,6 +611,11 @@ class DataReportSegmenterApp(Application):
         subsequent-page cursors are int snowflake IDs. Messages that carry
         none of our variables (segment records, unrelated apps' tags) yield no
         row.
+
+        ``pipeline_total`` is an optional ``(column, app_key)`` pair: when set,
+        each message's per-kind cumulative volume (from that app's
+        segment_totals_json) is added under ``column`` — the running total for
+        this report's pipeline that replaces the grand total_volume column.
         """
         after_dt = report_lib.ms_to_datetime(win_start)
         rows_by_id: dict[int, dict] = {}
@@ -598,7 +635,13 @@ class DataReportSegmenterApp(Application):
             for m in msgs:
                 if m.id in rows_by_id:
                     continue
-                values = report_lib.extract_row_values(m.data or {}, var_refs)
+                data = m.data or {}
+                values = report_lib.extract_row_values(data, var_refs)
+                if pipeline_total is not None:
+                    pt_col, pt_app_key = pipeline_total
+                    pt_value = report_lib.pipeline_total_value(data, pt_app_key, kind)
+                    if pt_value is not None:
+                        values[pt_col] = pt_value
                 if not values:
                     continue  # diff message with none of our tags -> no row
                 rows_by_id[m.id] = {
