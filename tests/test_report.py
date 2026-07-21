@@ -242,9 +242,9 @@ def test_render_csv_header_is_friendly_labels_and_ordering():
     # human headers: friendly timestamp, the configured segment label, and each
     # variable's displayString (never the internal <app_key>.<var> column key).
     assert lines[0] == "Timestamp (UTC),Pipeline,Flow Rate,Tank Level"
-    # rows sorted ascending by timestamp
-    assert lines[1].startswith("2026-01-01T00:00:00+00:00,A,1,10")
-    assert lines[2].startswith("2026-01-02T00:00:00+00:00,A,2,20")
+    # rows sorted ascending by timestamp; values rounded to 2 decimals
+    assert lines[1] == "2026-01-01T00:00:00+00:00,A,1.00,10.00"
+    assert lines[2] == "2026-01-02T00:00:00+00:00,A,2.00,20.00"
 
 
 def test_render_csv_segment_label_defaults_to_segment():
@@ -266,7 +266,7 @@ def test_render_csv_duplicate_labels_stay_data_correct():
     out = report_lib.render_csv(refs, rows, segment_label="Pipeline").decode("utf-8")
     lines = out.splitlines()
     assert lines[0] == "Timestamp (UTC),Pipeline,Flow,Flow"
-    assert lines[1] == "2026-01-01T00:00:00+00:00,A,1,2"
+    assert lines[1] == "2026-01-01T00:00:00+00:00,A,1.00,2.00"
 
 
 def test_render_csv_sparse_cells_blank():
@@ -279,8 +279,8 @@ def test_render_csv_sparse_cells_blank():
         },  # app.y missing
     ]
     out = report_lib.render_csv(refs, rows).decode("utf-8")
-    # trailing empty cell for the missing app.y
-    assert out.splitlines()[1] == "2026-01-01T00:00:00+00:00,A,1,"
+    # trailing empty cell for the missing app.y; present value rounded to 2 dp
+    assert out.splitlines()[1] == "2026-01-01T00:00:00+00:00,A,1.00,"
 
 
 # --- volume summary ------------------------------------------------------
@@ -357,22 +357,34 @@ def test_render_csv_summary_block_precedes_table():
         {
             "timestamp_utc": "2026-01-01T00:00:00+00:00",
             "segment_kind": "Pipeline A",
-            "values": {"app.x": 1},
+            "values": {"app.x": 12.523456},
         }
     ]
+    # raw noisy floats in -> 2-decimal rounding out, in both summary and table
     summary = [
-        ("Grand Total Volume (all-time)", 180.42),
-        ("Pipeline A (all-time)", 46.12),
+        ("Grand Total Volume (all-time)", 180.42295585648148),
+        ("Pipeline A (all-time)", 46.127060856481485),
     ]
     out = report_lib.render_csv(
         refs, rows, segment_label="Pipeline", summary=summary
     ).decode("utf-8")
     lines = out.splitlines()
     assert lines[0] == "Grand Total Volume (all-time),180.42"
-    assert lines[1] == "Pipeline A (all-time),46.12"
+    assert lines[1] == "Pipeline A (all-time),46.13"
     assert lines[2] == ""  # blank separator between summary and table
     assert lines[3] == "Timestamp (UTC),Pipeline,Flow"
-    assert lines[4] == "2026-01-01T00:00:00+00:00,Pipeline A,1"
+    assert lines[4] == "2026-01-01T00:00:00+00:00,Pipeline A,12.52"
+
+
+def test_render_csv_summary_blank_grand_renders_empty():
+    out = report_lib.render_csv(
+        _refs(("a.x", "Flow")),
+        [],
+        summary=[("Grand Total Volume (all-time)", ""), ("Pipeline A (all-time)", 0.0)],
+    ).decode("utf-8")
+    lines = out.splitlines()
+    assert lines[0] == "Grand Total Volume (all-time),"
+    assert lines[1] == "Pipeline A (all-time),0.00"
 
 
 # --- filename ------------------------------------------------------------

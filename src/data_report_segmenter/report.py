@@ -226,6 +226,18 @@ def next_page_cursor(
     return oldest
 
 
+def _format_number(value) -> str:
+    """Render a numeric cell rounded to 2 decimal places; blank for non-numbers.
+
+    Applied to every data cell and volume-summary value so the CSV never shows
+    raw float noise (e.g. ``180.42295585648148`` -> ``180.42``). Non-numeric
+    values (a missing cell, a blank grand total) render as an empty string.
+    """
+    if is_numeric(value):
+        return f"{float(value):.2f}"
+    return ""
+
+
 def render_csv(
     var_refs: list[VariableRef],
     rows: list[dict],
@@ -259,15 +271,14 @@ def render_csv(
     writer = csv.writer(buf)
     if summary:
         for label, value in summary:
-            writer.writerow([label, "" if value is None else value])
+            writer.writerow([label, _format_number(value)])
         writer.writerow([])  # blank row separating the summary from the table
     writer.writerow(header)
     for row in ordered:
         values = row.get("values", {})
         line = [row["timestamp_utc"], row["segment_kind"]]
         for col in columns:
-            cell = values.get(col)
-            line.append("" if cell is None else cell)
+            line.append(_format_number(values.get(col)))
         writer.writerow(line)
 
     return buf.getvalue().encode("utf-8")

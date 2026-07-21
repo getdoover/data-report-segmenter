@@ -134,7 +134,8 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
   ids (column *order* and value-matching still key off the internal
   `<app_key>.<var>` reference, so duplicate display names stay data-correct).
   One row per contributing ui_state message (sparse cells blank); ascending;
-  windows concatenated. Filename
+  windows concatenated. Numeric values (data cells and summary) are rounded to
+  2 decimal places. Filename
   `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised.
 - **All-time volume summary block** (optional, prepended above the table with a
   blank separator row): a two-column `label,value` block giving the grand total
