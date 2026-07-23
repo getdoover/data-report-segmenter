@@ -45,6 +45,13 @@ _PAGE_LIMIT = 1500
 _CROSS_SCAN_INITIAL_MS = 60 * 60 * 1000
 _CROSS_SCAN_GROWTH = 4
 
+# Endpoint-snapshot baseline lookback cap: how far before a report boundary to
+# page tag_values for the last logged volume totals. Both keys log <=15 min
+# apart (segment_totals_json every ~900 s; total_volume every 10 volume units),
+# so the snapshot is almost always on page 1; the cap bounds paging on devices
+# with sparse totaliser history instead of walking to the beginning of time.
+_TOTALS_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
+
 
 class DataReportSegmenterApp(Application):
     """Processor: the single authoritative writer of segment state.
@@ -406,7 +413,7 @@ class DataReportSegmenterApp(Application):
 
         try:
             windows, rows, var_refs = await self._build_report(kind, start_ts, end_ts)
-            summary = await self._volume_summary_rows()
+            summary = await self._volume_summary_rows(start_ts, end_ts)
             csv_bytes = report_lib.render_csv(
                 var_refs,
                 rows,
@@ -447,21 +454,165 @@ class DataReportSegmenterApp(Application):
 
     # -- report engine (impure orchestration around pure report_lib) --------
 
-    async def _volume_summary_rows(self) -> list[tuple[str, object]] | None:
-        """All-time volume summary rows for the report, or None if unavailable.
+    async def _volume_summary_rows(
+        self, start_ts, end_ts
+    ) -> list[tuple[str, object]] | None:
+        """Report-period volume summary rows for [start_ts, end_ts], or None.
 
-        Reads the shared tag_values aggregate and summarises any upstream app
-        publishing the volume-totals convention (total_volume +
-        segment_totals_json; see report.discover_volume_totals). Returns None
-        when nothing qualifies, so the CSV omits the block entirely. The
-        breakdown lists every configured kind plus "None".
+        Discovers upstream totaliser apps from the tag_values aggregate (any
+        block publishing the volume-totals convention; see
+        report.discover_volume_totals), then computes each app's volume over the
+        window from endpoint snapshots (the last logged values at/before each
+        boundary; report.period_volume_totals does the E-minus-B arithmetic) and
+        sums the per-app results. Differencing before summing keeps one app's
+        missing baseline from skewing the others. Returns None when no app yields
+        an end snapshot, so the CSV omits the block. The breakdown lists every
+        configured kind plus "None".
         """
         aggregate = await self.api.fetch_channel_aggregate(TAG_VALUES_CHANNEL)
-        grand, per_kind = report_lib.discover_volume_totals(aggregate.data or {})
-        if grand is None and not per_kind:
+        app_keys = report_lib.totaliser_app_keys(aggregate.data or {})
+        grand_total: float | None = None
+        per_kind: dict[str, float] = {}
+        produced = False
+        for app_key in app_keys:
+            # End snapshot: the last logged totals at/before end_ts with NO
+            # lookback cap (that cap is a *baseline* bound only), so an app that
+            # fell silent > _TOTALS_LOOKBACK_MS before end_ts still contributes
+            # its in-window volume instead of vanishing from the summary.
+            end_snap = await self._totals_snapshot(end_ts, app_key, lookback_ms=None)
+            if end_snap[0] is None and not end_snap[1]:
+                continue  # nothing ever logged at/before end for this app -> skip
+            base_snap = await self._totals_snapshot(start_ts, app_key)
+            if base_snap[0] is None or not base_snap[1]:
+                # A baseline key is missing before start (app first logged inside
+                # the window, the lookback cap was hit, or — since the two keys
+                # log independently — only one of total_volume / segment_totals
+                # was present in the lookback). Fill EACH missing key from the
+                # earliest in-window sample so the diff is per-key against a real
+                # baseline, not 0 (which would report the odometer's lifetime).
+                fallback = await self._earliest_window_snapshot(
+                    start_ts, end_ts, app_key
+                )
+                base_snap = report_lib.merge_baseline_snapshot(base_snap, fallback)
+            p_grand, p_kind = report_lib.period_volume_totals(base_snap, end_snap)
+            produced = True
+            if p_grand is not None:
+                grand_total = p_grand if grand_total is None else grand_total + p_grand
+            for kind, vol in p_kind.items():
+                per_kind[kind] = per_kind.get(kind, 0.0) + vol
+        if not produced:
             return None
         kinds = self._segment_kinds() + [seg.NONE_KIND]
-        return report_lib.build_volume_summary(grand, per_kind, kinds)
+        return report_lib.build_volume_summary(grand_total, per_kind, kinds)
+
+    async def _totals_snapshot(
+        self, at_ts, app_key, lookback_ms: int | None = _TOTALS_LOOKBACK_MS
+    ) -> tuple[float | None, dict[str, float]]:
+        """Last logged ``(grand, per_kind)`` totals for ``app_key`` at/before ``at_ts``.
+
+        Backward-pages tag_values (newest-first) for the most recent message
+        whose block carries ``total_volume`` and — independently, since messages
+        are per-change diffs that rarely move both at once — the most recent
+        carrying ``segment_totals_json``. Stops once both are found or the
+        lookback floor is reached. ``lookback_ms`` bounds how far before
+        ``at_ts`` to page: ``_TOTALS_LOOKBACK_MS`` for a BASELINE snapshot (the
+        spec's baseline lookback cap), ``None`` for an END snapshot so an app
+        that fell silent well before ``at_ts`` still yields its last logged value
+        rather than being dropped. Same time-vs-snowflake paging convention as
+        _collect_window_rows: the first page is datetime-bounded, later pages by
+        int snowflake cursor.
+        """
+        floor_dt = (
+            report_lib.ms_to_datetime(at_ts - lookback_ms)
+            if lookback_ms is not None
+            else None
+        )
+        grand: float | None = None
+        grand_found = False
+        per_kind: dict[str, float] = {}
+        kinds_found = False
+        before_bound: datetime | int = report_lib.ms_to_datetime(at_ts)
+        cursor_id: int | None = None
+        while True:
+            msgs = await self.api.list_messages(
+                TAG_VALUES_CHANNEL,
+                before=before_bound,
+                after=floor_dt,
+                limit=_PAGE_LIMIT,
+                field_names=[app_key],
+            )
+            if not msgs:
+                break
+            # Newest-first so "first carrying X" is genuinely the most recent.
+            for m in sorted(msgs, key=lambda msg: msg.id, reverse=True):
+                block = (m.data or {}).get(app_key)
+                if not isinstance(block, dict):
+                    continue
+                b_grand, b_kind = report_lib.totals_snapshot_from_block(block)
+                if not grand_found and b_grand is not None:
+                    grand = b_grand
+                    grand_found = True
+                if not kinds_found and report_lib.SEGMENT_TOTALS_KEY in block:
+                    per_kind = b_kind
+                    kinds_found = True
+                if grand_found and kinds_found:
+                    return grand, per_kind
+            cursor_id = report_lib.next_page_cursor(
+                [m.id for m in msgs], cursor_id, _PAGE_LIMIT
+            )
+            if cursor_id is None:
+                break
+            before_bound = cursor_id
+        return grand, per_kind
+
+    async def _earliest_window_snapshot(
+        self, start_ts, end_ts, app_key
+    ) -> tuple[float | None, dict[str, float]]:
+        """Earliest in-window ``(grand, per_kind)`` totals for ``app_key``.
+
+        The baseline fallback when nothing was logged before ``start_ts``: pages
+        (start_ts, end_ts] and keeps the OLDEST message carrying ``total_volume``
+        and the oldest carrying ``segment_totals_json`` (per-change diffs, so the
+        two can differ). Returns ``(None, {})`` when the window has no totals, in
+        which case period_volume_totals treats the baseline as zero.
+        """
+        after_dt = report_lib.ms_to_datetime(start_ts)
+        grand: float | None = None
+        grand_id: int | None = None
+        per_kind: dict[str, float] = {}
+        kinds_id: int | None = None
+        before_bound: datetime | int = report_lib.ms_to_datetime(end_ts)
+        cursor_id: int | None = None
+        while True:
+            msgs = await self.api.list_messages(
+                TAG_VALUES_CHANNEL,
+                before=before_bound,
+                after=after_dt,
+                limit=_PAGE_LIMIT,
+                field_names=[app_key],
+            )
+            if not msgs:
+                break
+            for m in msgs:
+                block = (m.data or {}).get(app_key)
+                if not isinstance(block, dict):
+                    continue
+                b_grand, b_kind = report_lib.totals_snapshot_from_block(block)
+                if b_grand is not None and (grand_id is None or m.id < grand_id):
+                    grand = b_grand
+                    grand_id = m.id
+                if report_lib.SEGMENT_TOTALS_KEY in block and (
+                    kinds_id is None or m.id < kinds_id
+                ):
+                    per_kind = b_kind
+                    kinds_id = m.id
+            cursor_id = report_lib.next_page_cursor(
+                [m.id for m in msgs], cursor_id, _PAGE_LIMIT
+            )
+            if cursor_id is None:
+                break
+            before_bound = cursor_id
+        return grand, per_kind
 
     async def _build_report(self, kind, start_ts, end_ts):
         current = await self._current_segment()
@@ -479,6 +630,9 @@ class DataReportSegmenterApp(Application):
         # read from segment_totals_json — but only when the totaliser app
         # actually publishes it, so generic devices keep their total_volume.
         pipeline_total = None
+        # The synthetic column inherits the total_volume variable's units so the
+        # renamed header reads "Total Injected Volume (<units>)"; absent -> "".
+        pipeline_total_units = ""
         total_ref = report_lib.find_total_volume_ref(var_refs)
         if total_ref is not None:
             tag_values = await self.api.fetch_channel_aggregate(TAG_VALUES_CHANNEL)
@@ -486,6 +640,7 @@ class DataReportSegmenterApp(Application):
             if report_lib.SEGMENT_TOTALS_KEY in block:
                 var_refs = [r for r in var_refs if r is not total_ref]
                 pipeline_total = (report_lib.PIPELINE_TOTAL_COL, total_ref.path[0])
+                pipeline_total_units = total_ref.units
 
         # tag_values messages are keyed by app_key at the top level; restrict
         # history reads to the app_keys our variables actually live under (plus
@@ -507,7 +662,10 @@ class DataReportSegmenterApp(Application):
         if pipeline_total is not None:
             report_refs.append(
                 report_lib.VariableRef(
-                    report_lib.PIPELINE_TOTAL_COL, report_lib.PIPELINE_TOTAL_LABEL, ()
+                    report_lib.PIPELINE_TOTAL_COL,
+                    report_lib.PIPELINE_TOTAL_LABEL,
+                    (),
+                    pipeline_total_units,
                 )
             )
         return windows, rows, report_refs

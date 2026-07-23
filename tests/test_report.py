@@ -47,6 +47,7 @@ UI_STATE = {
                         "type": "uiVariable",
                         "varType": "integer",
                         "displayString": "Level Count",
+                        "units": "%",
                         "currentValue": "$tag.app().count:number:0",
                     },
                     "status_text": {
@@ -125,6 +126,17 @@ def test_walk_uses_displaystring_as_label_with_key_fallback():
     assert by_col["level_sensor_1.level_count"] == "Level Count"
     # ...falling back to the variable's own key when it has no displayString.
     assert by_col["flow_sensor_1.pump_block.pressure"] == "pressure"
+
+
+def test_walk_captures_units_attribute():
+    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    by_col = {r.column: r.units for r in refs}
+    # units come straight from the ui_state node when present...
+    assert by_col["level_sensor_1.level_count"] == "%"
+    # ...and default to "" for variables that carry none (4-20mA columns bake
+    # their unit into displayString instead).
+    assert by_col["flow_sensor_1.flow_rate"] == ""
+    assert by_col["flow_sensor_1.pump_block.pressure"] == ""
 
 
 def test_walk_skips_literal_currentvalue():
@@ -283,6 +295,33 @@ def test_render_csv_sparse_cells_blank():
     assert out.splitlines()[1] == "2026-01-01T00:00:00+00:00,A,1.00,"
 
 
+# --- column header units -------------------------------------------------
+
+
+def test_column_header_appends_units_when_present():
+    assert (
+        report_lib.column_header(VariableRef("a.x", "Tank Volume", ("a", "x"), "L"))
+        == "Tank Volume (L)"
+    )
+    # no units -> bare label (4-20mA columns bake the unit into the label).
+    assert (
+        report_lib.column_header(VariableRef("a.y", "Flow (GPD)", ("a", "y")))
+        == "Flow (GPD)"
+    )
+
+
+def test_render_csv_header_appends_units():
+    refs = [
+        VariableRef("a.level", "Level", ("a", "level"), "%"),
+        VariableRef("a.vol", "Tank Volume", ("a", "vol"), "L"),
+        VariableRef("a.flow", "Flow (GPD)", ("a", "flow")),  # units already in label
+    ]
+    out = report_lib.render_csv(refs, [], segment_label="Pipeline").decode("utf-8")
+    assert out.splitlines()[0] == (
+        "Timestamp (UTC),Pipeline,Level (%),Tank Volume (L),Flow (GPD)"
+    )
+
+
 # --- volume summary ------------------------------------------------------
 
 
@@ -330,6 +369,111 @@ def test_discover_volume_totals_none_and_junk():
     assert per_kind == {"Pipeline B": 3}
 
 
+# --- totaliser discovery + endpoint snapshots ----------------------------
+
+
+def test_totaliser_app_keys_discovers_and_sorts():
+    data = {
+        "skid_2": {"total_volume": 20.0, "segment_totals_json": "{}"},
+        "skid_1": {"total_volume": 100.0, "segment_totals_json": "{}"},
+        "flow_sensor": {"value": 5},  # no segment_totals_json -> not a totaliser
+    }
+    assert report_lib.totaliser_app_keys(data) == ["skid_1", "skid_2"]
+    assert report_lib.totaliser_app_keys({}) == []
+    assert report_lib.totaliser_app_keys("junk") == []
+
+
+def test_totals_snapshot_from_block():
+    grand, per_kind = report_lib.totals_snapshot_from_block(
+        {
+            "total_volume": 180.42,
+            "segment_totals_json": '{"None": 134.3, "Pipeline A": 46.12}',
+            "flow_value": 12.5,
+        }
+    )
+    assert grand == 180.42
+    assert per_kind == {"None": 134.3, "Pipeline A": 46.12}
+    # missing total_volume -> grand None; non-numeric per-kind skipped
+    grand, per_kind = report_lib.totals_snapshot_from_block(
+        {"segment_totals_json": '{"Pipeline A": "x", "Pipeline B": 3}'}
+    )
+    assert grand is None
+    assert per_kind == {"Pipeline B": 3}
+    # non-dict block -> empty snapshot
+    assert report_lib.totals_snapshot_from_block(None) == (None, {})
+
+
+def test_period_volume_totals_normal_diff():
+    baseline = (100.0, {"Pipeline A": 60.0, "None": 40.0})
+    end = (180.0, {"Pipeline A": 110.0, "None": 70.0})
+    grand, per_kind = report_lib.period_volume_totals(baseline, end)
+    assert grand == 80.0
+    assert per_kind == {"Pipeline A": 50.0, "None": 30.0}
+
+
+def test_period_volume_totals_missing_baseline():
+    # No baseline snapshot -> the whole end value counts for the period.
+    grand, per_kind = report_lib.period_volume_totals(
+        (None, {}), (180.0, {"Pipeline A": 110.0})
+    )
+    assert grand == 180.0
+    assert per_kind == {"Pipeline A": 110.0}
+    # end carries no grand -> grand stays None
+    assert report_lib.period_volume_totals((None, {}), (None, {})) == (None, {})
+
+
+def test_period_volume_totals_per_kind_negative_clamps_to_zero():
+    # A retroactive repaint re-attributed volume away from Pipeline A: its per-
+    # kind end < baseline, which must clamp to 0.0 rather than go negative.
+    grand, per_kind = report_lib.period_volume_totals(
+        (100.0, {"Pipeline A": 60.0}), (120.0, {"Pipeline A": 50.0})
+    )
+    assert grand == 20.0
+    assert per_kind == {"Pipeline A": 0.0}
+
+
+def test_period_volume_totals_grand_reset_uses_end():
+    # Odometer wiped (end grand < baseline grand) -> restart-from-0: period is
+    # the end value alone. Per-kind drops likewise clamp to 0.0.
+    grand, per_kind = report_lib.period_volume_totals(
+        (200.0, {"Pipeline A": 150.0}), (30.0, {"Pipeline A": 30.0})
+    )
+    assert grand == 30.0
+    assert per_kind == {"Pipeline A": 0.0}
+
+
+def test_merge_baseline_snapshot_fills_only_missing_keys():
+    # Both keys present -> primary kept untouched (no fallback bleed-through).
+    assert report_lib.merge_baseline_snapshot(
+        (100.0, {"Pipeline A": 60.0}), (5.0, {"Pipeline A": 3.0})
+    ) == (100.0, {"Pipeline A": 60.0})
+    # Grand missing (total_volume logs only per N units) but per-kind found:
+    # take the grand from the fallback, keep primary's per-kind.
+    assert report_lib.merge_baseline_snapshot(
+        (None, {"Pipeline A": 60.0}), (5.0, {"Pipeline A": 3.0})
+    ) == (5.0, {"Pipeline A": 60.0})
+    # Mirror case: per-kind missing (segment_totals older than the lookback) but
+    # grand found -> take per-kind from the fallback, keep primary's grand.
+    assert report_lib.merge_baseline_snapshot(
+        (100.0, {}), (5.0, {"Pipeline A": 3.0})
+    ) == (100.0, {"Pipeline A": 3.0})
+    # Both missing -> wholly from the fallback (the earliest in-window sample).
+    assert report_lib.merge_baseline_snapshot(
+        (None, {}), (5.0, {"Pipeline A": 3.0})
+    ) == (5.0, {"Pipeline A": 3.0})
+
+
+def test_merge_baseline_snapshot_partial_fallback_still_zero():
+    # Fallback also empty for a missing key -> that key stays missing (None/{}),
+    # so period_volume_totals then treats the baseline as 0 for it (spec's
+    # "... else 0" tail).
+    assert report_lib.merge_baseline_snapshot((None, {}), (None, {})) == (None, {})
+    assert report_lib.merge_baseline_snapshot((None, {"A": 1.0}), (None, {})) == (
+        None,
+        {"A": 1.0},
+    )
+
+
 def test_build_volume_summary_lists_all_kinds_with_zero_fallback():
     rows = report_lib.build_volume_summary(
         180.42,
@@ -337,18 +481,18 @@ def test_build_volume_summary_lists_all_kinds_with_zero_fallback():
         ["Pipeline A", "Pipeline B", "Pipeline C", "None"],
     )
     assert rows == [
-        ("Grand Total Volume (all-time)", 180.42),
-        ("Pipeline A (all-time)", 46.12),
-        ("Pipeline B (all-time)", 0.0),  # no data yet -> 0.0, still listed
-        ("Pipeline C (all-time)", 0.0),
-        ("None (all-time)", 134.3),
+        ("Grand Total Volume (report period)", 180.42),
+        ("Pipeline A (report period)", 46.12),
+        ("Pipeline B (report period)", 0.0),  # no data yet -> 0.0, still listed
+        ("Pipeline C (report period)", 0.0),
+        ("None (report period)", 134.3),
     ]
 
 
 def test_build_volume_summary_blank_grand_when_absent():
     rows = report_lib.build_volume_summary(None, {}, ["Pipeline A", "None"])
-    assert rows[0] == ("Grand Total Volume (all-time)", "")
-    assert rows[1] == ("Pipeline A (all-time)", 0.0)
+    assert rows[0] == ("Grand Total Volume (report period)", "")
+    assert rows[1] == ("Pipeline A (report period)", 0.0)
 
 
 def test_render_csv_summary_block_precedes_table():
@@ -362,15 +506,15 @@ def test_render_csv_summary_block_precedes_table():
     ]
     # raw noisy floats in -> 2-decimal rounding out, in both summary and table
     summary = [
-        ("Grand Total Volume (all-time)", 180.42295585648148),
-        ("Pipeline A (all-time)", 46.127060856481485),
+        ("Grand Total Volume (report period)", 180.42295585648148),
+        ("Pipeline A (report period)", 46.127060856481485),
     ]
     out = report_lib.render_csv(
         refs, rows, segment_label="Pipeline", summary=summary
     ).decode("utf-8")
     lines = out.splitlines()
-    assert lines[0] == "Grand Total Volume (all-time),180.42"
-    assert lines[1] == "Pipeline A (all-time),46.13"
+    assert lines[0] == "Grand Total Volume (report period),180.42"
+    assert lines[1] == "Pipeline A (report period),46.13"
     assert lines[2] == ""  # blank separator between summary and table
     assert lines[3] == "Timestamp (UTC),Pipeline,Flow"
     assert lines[4] == "2026-01-01T00:00:00+00:00,Pipeline A,12.52"
@@ -380,11 +524,14 @@ def test_render_csv_summary_blank_grand_renders_empty():
     out = report_lib.render_csv(
         _refs(("a.x", "Flow")),
         [],
-        summary=[("Grand Total Volume (all-time)", ""), ("Pipeline A (all-time)", 0.0)],
+        summary=[
+            ("Grand Total Volume (report period)", ""),
+            ("Pipeline A (report period)", 0.0),
+        ],
     ).decode("utf-8")
     lines = out.splitlines()
-    assert lines[0] == "Grand Total Volume (all-time),"
-    assert lines[1] == "Pipeline A (all-time),0.00"
+    assert lines[0] == "Grand Total Volume (report period),"
+    assert lines[1] == "Pipeline A (report period),0.00"
 
 
 # --- pipeline-total column (per-pipeline running total) ------------------
@@ -434,8 +581,19 @@ def test_render_csv_includes_pipeline_total_column():
     ]
     out = report_lib.render_csv(refs, rows, segment_label="Pipeline").decode("utf-8")
     lines = out.splitlines()
-    assert lines[0] == "Timestamp (UTC),Pipeline,Flow,Pipeline Total Volume"
+    assert lines[0] == "Timestamp (UTC),Pipeline,Flow,Total Injected Volume"
     assert lines[1] == "2026-01-01T00:00:00+00:00,Pipeline A,12.50,46.13"
+
+
+def test_render_csv_pipeline_total_header_includes_units():
+    # The synthetic column inherits the total_volume variable's units.
+    refs = [
+        VariableRef(
+            report_lib.PIPELINE_TOTAL_COL, report_lib.PIPELINE_TOTAL_LABEL, (), "gal"
+        ),
+    ]
+    out = report_lib.render_csv(refs, [], segment_label="Pipeline").decode("utf-8")
+    assert out.splitlines()[0] == "Timestamp (UTC),Pipeline,Total Injected Volume (gal)"
 
 
 # --- filename ------------------------------------------------------------

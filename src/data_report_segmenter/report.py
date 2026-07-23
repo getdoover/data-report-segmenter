@@ -19,7 +19,7 @@ from typing import NamedTuple
 NUMERIC_VAR_TYPES = ("float", "integer")
 _TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
 
-# Convention for the all-time volume summary block: an upstream app (e.g. a
+# Convention for the volume summary block: an upstream app (e.g. a
 # per-segment volume totaliser) publishes a running grand total under
 # VOLUME_TOTAL_KEY and a JSON object mapping segment kind -> cumulative volume
 # under SEGMENT_TOTALS_KEY. A report scans tag_values for any app carrying both
@@ -31,7 +31,7 @@ SEGMENT_TOTALS_KEY = "segment_totals_json"
 # per-pipeline report: a running total scoped to the report's own kind, read
 # from segment_totals_json (see find_total_volume_ref / pipeline_total_value).
 PIPELINE_TOTAL_COL = "__pipeline_total__"
-PIPELINE_TOTAL_LABEL = "Pipeline Total Volume"
+PIPELINE_TOTAL_LABEL = "Total Injected Volume"
 
 
 class VariableRef(NamedTuple):
@@ -47,11 +47,17 @@ class VariableRef(NamedTuple):
       the value actually lives, e.g. ``("4_20ma_sensor_1", "value")``.
       ui_state carries only the *reference* ($tag...) to this location, never
       the value history — so the report reads history from tag_values here.
+    - ``units`` is the variable's ui ``units`` attribute (e.g. ``"%"``, ``"m"``,
+      ``"L"``), appended to the CSV header as ``label (units)`` when non-empty
+      (see column_header). Empty ``""`` when the node carries no units — 4-20mA
+      columns bake their unit into ``displayString`` instead, so they render
+      unchanged.
     """
 
     column: str
     label: str
     path: tuple[str, ...]
+    units: str = ""
 
 
 def parse_tag_ref(ref, context_app_key: str) -> tuple[str, ...] | None:
@@ -108,7 +114,17 @@ def _walk_children(
                     if isinstance(display, str) and display.strip()
                     else name
                 )
-                out.append(VariableRef(column=column, label=label, path=path))
+                # Units (if any) sit alongside displayString in ui_state; the
+                # header appends them via column_header. Absent -> "".
+                units_raw = node.get("units")
+                units = (
+                    units_raw.strip()
+                    if isinstance(units_raw, str) and units_raw.strip()
+                    else ""
+                )
+                out.append(
+                    VariableRef(column=column, label=label, path=path, units=units)
+                )
         # Recurse into submodules / containers regardless of this node's type;
         # app() still resolves to the owning application, so context is stable.
         grandchildren = node.get("children")
@@ -244,6 +260,17 @@ def _format_number(value) -> str:
     return ""
 
 
+def column_header(ref: VariableRef) -> str:
+    """CSV header for a variable: its label, plus ``(units)`` when it has units.
+
+    A variable whose ui_state node carries a non-empty ``units`` attribute
+    renders as ``label (units)`` (e.g. ``Tank Volume (L)``); one without units
+    renders as the bare label — 4-20mA flow/pressure columns already bake their
+    unit into ``displayString``, so they stay unchanged.
+    """
+    return f"{ref.label} ({ref.units})" if ref.units else ref.label
+
+
 def render_csv(
     var_refs: list[VariableRef],
     rows: list[dict],
@@ -253,13 +280,14 @@ def render_csv(
     """Render report rows to CSV bytes with the stdlib csv module.
 
     When ``summary`` is given (a list of ``(label, value)`` rows, e.g. the
-    all-time volume totals), it is written first as a two-column block followed
+    report-period volume totals), it is written first as a two-column block followed
     by a blank separator row, then the time-series table.
 
     Time-series headers are the labels the operator reads in the widget, not
     machine ids: ``Timestamp (UTC),<segment_label>,<var label>,...``, where each
     data-column header is a variable's ``VariableRef.label`` (its ui
-    displayString) and ``segment_label`` is the app's configured Segments Label.
+    displayString), suffixed with ``(units)`` when it carries units (see
+    column_header), and ``segment_label`` is the app's configured Segments Label.
     Column *order* and value matching still key off ``VariableRef.column``
     internally, so duplicate display names stay data-correct (only the header
     repeats).
@@ -269,7 +297,11 @@ def render_csv(
     order; missing cells render blank.
     """
     columns = [ref.column for ref in var_refs]
-    header = ["Timestamp (UTC)", segment_label, *(ref.label for ref in var_refs)]
+    header = [
+        "Timestamp (UTC)",
+        segment_label,
+        *(column_header(ref) for ref in var_refs),
+    ]
 
     ordered = sorted(rows, key=lambda r: r["timestamp_utc"])
 
@@ -333,10 +365,103 @@ def discover_volume_totals(
     return grand, per_kind
 
 
+def totaliser_app_keys(tag_values_data: dict) -> list[str]:
+    """App keys in a ``tag_values`` aggregate that publish the volume-totals
+    convention (a ``segment_totals_json`` block; see discover_volume_totals).
+
+    Sorted for deterministic iteration. These are the apps whose per-period
+    volume the report sums from endpoint snapshots (see period_volume_totals).
+    """
+    if not isinstance(tag_values_data, dict):
+        return []
+    keys = [
+        key
+        for key, block in tag_values_data.items()
+        if isinstance(block, dict) and SEGMENT_TOTALS_KEY in block
+    ]
+    keys.sort()
+    return keys
+
+
+def totals_snapshot_from_block(block) -> tuple[float | None, dict[str, float]]:
+    """Grand + per-kind volume totals from ONE app's ``tag_values`` block.
+
+    A single-app version of discover_volume_totals used to build endpoint
+    snapshots (the last logged values at/before a report boundary): reads the
+    numeric ``total_volume`` (the grand, None when absent/non-numeric) and the
+    ``segment_totals_json`` object mapping kind -> cumulative volume. Only
+    numeric per-kind values are kept.
+    """
+    grand: float | None = None
+    per_kind: dict[str, float] = {}
+    if not isinstance(block, dict):
+        return grand, per_kind
+    total = block.get(VOLUME_TOTAL_KEY)
+    if is_numeric(total):
+        grand = total
+    for kind, vol in _parse_json_object(block.get(SEGMENT_TOTALS_KEY)).items():
+        if is_numeric(vol):
+            per_kind[kind] = vol
+    return grand, per_kind
+
+
+def period_volume_totals(
+    baseline: tuple[float | None, dict[str, float]],
+    end: tuple[float | None, dict[str, float]],
+) -> tuple[float | None, dict[str, float]]:
+    """One totaliser app's volume over the report period, from two snapshots.
+
+    ``baseline`` (B, at/before start_ts) and ``end`` (E, at/before end_ts) are
+    each ``(grand, per_kind)`` snapshots (see totals_snapshot_from_block). The
+    period figure is the endpoint difference E - B:
+
+    - grand: ``E - B`` (missing B treated as 0); when ``E < B`` the odometer was
+      reset, so the drop is a restart-from-0 and the period is ``E`` alone.
+      None when E carries no grand total.
+    - per kind: ``E_k - B_k`` (missing ``B_k`` treated as 0), clamped at ``0.0``
+      so a retroactive repaint that re-attributed volume away from a kind never
+      reports negative.
+    """
+    base_grand, base_kind = baseline
+    end_grand, end_kind = end
+    if end_grand is None:
+        grand: float | None = None
+    else:
+        base = base_grand if base_grand is not None else 0.0
+        grand = end_grand - base if end_grand >= base else end_grand
+    per_kind: dict[str, float] = {}
+    for kind, e_val in end_kind.items():
+        per_kind[kind] = max(0.0, e_val - base_kind.get(kind, 0.0))
+    return grand, per_kind
+
+
+def merge_baseline_snapshot(
+    primary: tuple[float | None, dict[str, float]],
+    fallback: tuple[float | None, dict[str, float]],
+) -> tuple[float | None, dict[str, float]]:
+    """Fill a partial baseline snapshot's missing keys from ``fallback``.
+
+    A baseline snapshot's two keys are searched independently (``total_volume``
+    logs only per N volume units; ``segment_totals_json`` republishes on a
+    ~900 s timer), so a pre-window lookback on an idle device can find one key
+    but not the other. Each key missing from ``primary`` — a ``None`` grand or
+    an empty per-kind map — is taken from ``fallback`` (the earliest in-window
+    sample) so period_volume_totals diffs against a real baseline instead of 0,
+    which would otherwise report the odometer's lifetime value. A key already
+    present in ``primary`` is kept as-is. This applies the spec's per-key
+    "missing-baseline -> earliest in-window sample else 0" rule.
+    """
+    primary_grand, primary_kind = primary
+    fb_grand, fb_kind = fallback
+    grand = primary_grand if primary_grand is not None else fb_grand
+    per_kind = primary_kind if primary_kind else fb_kind
+    return grand, per_kind
+
+
 def build_volume_summary(
     grand, per_kind: dict, kinds: list[str]
 ) -> list[tuple[str, object]]:
-    """Summary rows ``(label, value)`` for the all-time volume block.
+    """Summary rows ``(label, value)`` for the report-period volume block.
 
     One row for the grand total, then one per ``kind`` in order, each reading
     ``per_kind`` and rendering ``0.0`` when a kind has accrued no volume yet. A
@@ -346,11 +471,11 @@ def build_volume_summary(
     """
     totals = per_kind if isinstance(per_kind, dict) else {}
     rows: list[tuple[str, object]] = [
-        ("Grand Total Volume (all-time)", grand if is_numeric(grand) else "")
+        ("Grand Total Volume (report period)", grand if is_numeric(grand) else "")
     ]
     for kind in kinds:
         vol = totals.get(kind)
-        rows.append((f"{kind} (all-time)", vol if is_numeric(vol) else 0.0))
+        rows.append((f"{kind} (report period)", vol if is_numeric(vol) else 0.0))
     return rows
 
 
