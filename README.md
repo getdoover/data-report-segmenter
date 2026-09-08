@@ -139,17 +139,68 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
   `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised.
 - **Pipeline-scoped total column**: when the totaliser convention is present
   (an app publishing `total_volume` + `segment_totals_json`), the grand
-  `total_volume` column is replaced by a **`Pipeline Total Volume`** column — a
+  `total_volume` column is replaced by a **`Total Injected Volume`** column — a
   running total scoped to *this report's* kind, read from
   `segment_totals_json[kind]` (`report.find_total_volume_ref` /
-  `pipeline_total_value`). Devices without the convention keep their plain
-  `total_volume` column unchanged. (The grand total still appears in the
-  all-time summary block above.)
-- **All-time volume summary block** (optional, prepended above the table with a
-  blank separator row): a two-column `label,value` block giving the grand total
-  volume and a per-pipeline breakdown (every configured kind + "None", `0.0`
-  where a kind has no volume yet). These are **all-time cumulative** figures, not
-  scoped to the report's date range. Source is a convention, not config: the
+  `pipeline_total_value`). It is also scoped to the **report period**: every row
+  is the message's cumulative minus the kind's value in the pre-window baseline
+  snapshot, clamped at 0 (`report.pipeline_period_value`). So the column starts
+  near 0 and reads on the same scale as the `<kind> (report period)` summary
+  row — both are `E_k - B_k` against the one baseline
+  (`application._period_snapshots` computes it once and hands it to both).
+  Without the re-base the column showed the device odometer's lifetime figure
+  and appeared to contradict the summary. Devices without the convention keep
+  their plain `total_volume` column unchanged.
+
+  With a **single** app publishing the totaliser convention the column's last
+  value **equals** the `<kind> (report period)` summary row for the segment
+  shapes seen in practice. A window still open at `end_ts` ends on the very
+  message the summary's `E_k` came from. A window that closed earlier would
+  otherwise stop short: the upstream totaliser freezes a segment's total at the
+  switch and publishes that frozen figure only in its *next*
+  `segment_totals_json` log (the ~900 s republish, or the first message of an
+  offline device's backlog), after the window closed. So each closed window gets
+  a **closing row** at its end carrying that figure — the earliest message
+  actually holding a value for this kind after the close
+  (`application._closing_row` / `_closing_kind_total`).
+
+  Three bounds keep that row honest:
+
+  - The scan stops at the **next window of this kind** (`end_ts` for the last
+    one). Without it, a kind that closes and reopens inside one republish
+    interval would take its "frozen" figure from a message logged *inside the
+    next window*, crediting the earlier one with volume it never pumped.
+  - The value is **capped at that app's own `E_k - B_k`**. The scan finds the
+    *earliest* post-close sample while the summary takes the *last* one at or
+    before `end_ts`; those agree only while the kind's series is monotone
+    between them, which an odometer reset or a retroactive repaint breaks. The
+    cap is what makes the closing row unable to exceed the summary. (Real
+    in-window rows are still message-exact — on a non-monotone series a sample
+    can sit above the final summary figure, because that is what the device
+    reported at that instant.)
+  - The row is emitted only when it exceeds every pipeline value already in the
+    window **and** is above zero, so the column never steps backwards.
+
+  When no totals message carrying this kind falls in the scan range there is no
+  row: for the last closed window none is needed (`E_k` is then the last
+  in-window message anyway), and for an earlier one the frozen figure is
+  genuinely unknown, which a blank cell states better than a guess.
+
+  With more than one totaliser app the summary sums all of them while the
+  column tracks the single app that owns the `total_volume` variable
+  (`report.find_total_volume_ref` returns the first match), so equality is not
+  claimed there — the column is a subset.
+- **Units in headers**: a variable's ui_state `units` attribute is normalised by
+  `report.clean_units` (whitespace and one enclosing pair of parentheses
+  stripped, so `" (GPH)"` -> `GPH`), and `column_header` skips the suffix when
+  the label already ends with `(units)` — headers read `AI Value (GPH)`, never
+  `AI Value ((GPH))`.
+- **Report-period volume summary block** (optional, prepended above the table
+  with a blank separator row): a two-column `label,value` block giving the grand
+  total volume and a per-pipeline breakdown (every configured kind + "None",
+  `0.0` where a kind has no volume yet). These are **report-period** figures —
+  the endpoint difference `E - B` between the last totals logged at/before
+  `end_ts` and at/before `start_ts`, not all-time cumulatives. Source is a convention, not config: the
   report scans `tag_values` for any app publishing a running `total_volume`
   (grand) and a `segment_totals_json` object (`{kind: cumulative volume}`), and
   sums across apps if more than one qualifies (`report.discover_volume_totals`).

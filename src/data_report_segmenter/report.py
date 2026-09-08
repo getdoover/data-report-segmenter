@@ -28,8 +28,10 @@ VOLUME_TOTAL_KEY = "total_volume"
 SEGMENT_TOTALS_KEY = "segment_totals_json"
 
 # Synthetic column that replaces the grand-total ``total_volume`` column in a
-# per-pipeline report: a running total scoped to the report's own kind, read
-# from segment_totals_json (see find_total_volume_ref / pipeline_total_value).
+# per-pipeline report: a running total scoped to the report's own kind AND to
+# the report period, read from segment_totals_json and re-based against the
+# pre-window baseline (see find_total_volume_ref / pipeline_total_value /
+# pipeline_period_value).
 PIPELINE_TOTAL_COL = "__pipeline_total__"
 PIPELINE_TOTAL_LABEL = "Total Injected Volume"
 
@@ -48,10 +50,11 @@ class VariableRef(NamedTuple):
       ui_state carries only the *reference* ($tag...) to this location, never
       the value history — so the report reads history from tag_values here.
     - ``units`` is the variable's ui ``units`` attribute (e.g. ``"%"``, ``"m"``,
-      ``"L"``), appended to the CSV header as ``label (units)`` when non-empty
-      (see column_header). Empty ``""`` when the node carries no units — 4-20mA
-      columns bake their unit into ``displayString`` instead, so they render
-      unchanged.
+      ``"L"``) after clean_units has stripped whitespace and any enclosing
+      parentheses, appended to the CSV header as ``label (units)`` when
+      non-empty (see column_header). Empty ``""`` when the node carries no
+      units — 4-20mA columns bake their unit into ``displayString`` instead, so
+      they render unchanged.
     """
 
     column: str
@@ -89,6 +92,24 @@ def parse_tag_ref(ref, context_app_key: str) -> tuple[str, ...] | None:
     return tuple(segments) or None
 
 
+def clean_units(raw) -> str:
+    """Normalise a ui_state ``units`` attribute to a bare unit token.
+
+    Apps publish units inconsistently: a plain ``"%"``, a padded ``" (GPH)"``
+    (leading space, already wrapped in parentheses), or ``"(mm)"``. Since
+    column_header renders ``label (units)``, an already-wrapped value would
+    render as ``AI Value ((GPH))``. This strips surrounding whitespace, ONE
+    enclosing pair of parentheses, then any whitespace left inside them.
+    Non-string or blank input yields ``""`` (no units).
+    """
+    if not isinstance(raw, str):
+        return ""
+    units = raw.strip()
+    if len(units) >= 2 and units.startswith("(") and units.endswith(")"):
+        units = units[1:-1]
+    return units.strip()
+
+
 def _walk_children(
     children: dict,
     column_prefix: str,
@@ -115,13 +136,10 @@ def _walk_children(
                     else name
                 )
                 # Units (if any) sit alongside displayString in ui_state; the
-                # header appends them via column_header. Absent -> "".
-                units_raw = node.get("units")
-                units = (
-                    units_raw.strip()
-                    if isinstance(units_raw, str) and units_raw.strip()
-                    else ""
-                )
+                # header appends them via column_header. Normalised by
+                # clean_units (apps publish " (GPH)" as readily as "GPH");
+                # absent/blank -> "".
+                units = clean_units(node.get("units"))
                 out.append(
                     VariableRef(column=column, label=label, path=path, units=units)
                 )
@@ -266,9 +284,16 @@ def column_header(ref: VariableRef) -> str:
     A variable whose ui_state node carries a non-empty ``units`` attribute
     renders as ``label (units)`` (e.g. ``Tank Volume (L)``); one without units
     renders as the bare label — 4-20mA flow/pressure columns already bake their
-    unit into ``displayString``, so they stay unchanged.
+    unit into ``displayString``, so they stay unchanged. A label that ALREADY
+    ends with ``(units)`` is left alone rather than suffixed twice: apps that
+    bake the unit into ``displayString`` and *also* publish it as ``units``
+    would otherwise render ``AI Value (GPH) (GPH)``.
     """
-    return f"{ref.label} ({ref.units})" if ref.units else ref.label
+    if not ref.units:
+        return ref.label
+    if ref.label.endswith(f"({ref.units})"):
+        return ref.label
+    return f"{ref.label} ({ref.units})"
 
 
 def render_csv(
@@ -502,6 +527,10 @@ def pipeline_total_value(message_data: dict, app_key: str, kind: str):
     the value for ``kind`` (0.0 when the kind has accrued nothing yet), or None
     when this (diff) message doesn't carry ``segment_totals_json`` so the cell
     stays blank, exactly as the grand-total cell did on such messages.
+
+    The value is the on-device odometer's LIFETIME cumulative for the kind; the
+    report re-bases it against the period baseline via pipeline_period_value
+    before it reaches a cell.
     """
     if not isinstance(message_data, dict):
         return None
@@ -510,6 +539,37 @@ def pipeline_total_value(message_data: dict, app_key: str, kind: str):
         return None
     value = _parse_json_object(block.get(SEGMENT_TOTALS_KEY)).get(kind)
     return value if is_numeric(value) else 0.0
+
+
+def pipeline_period_value(cumulative, baseline) -> float:
+    """One cell of the running pipeline total, scoped to the report period.
+
+    ``cumulative`` is a message's LIFETIME per-kind total (pipeline_total_value)
+    and ``baseline`` is the same kind's value in the report's baseline snapshot
+    (the last logged totals at/before start_ts, ``0.0`` when the kind is absent
+    from it). The cell is ``cumulative - baseline``, clamped at ``0.0``.
+
+    Re-basing is what puts the column on the summary's scale: both are
+    ``E_k - B_k`` against the same baseline. Without it a column ending at the
+    odometer's lifetime figure sits above a summary quoting the period figure
+    and the report reads as wrong.
+
+    The last row *equals* the ``<kind> (report period)`` summary value whenever
+    a single app publishes the totaliser convention. A window still open at
+    end_ts ends on the same message the summary's ``E_k`` came from; a window
+    that closed earlier gets a synthetic closing row carrying the frozen total
+    the totaliser republished after the switch (application._closing_row), which
+    is capped at ``E_k - B_k`` so it can never exceed the summary. A real
+    in-window cell is message-exact and is NOT capped: on a non-monotone series
+    (odometer reset, retroactive repaint) a sample can read above the final
+    summary figure, that being what the device published at the time. With more
+    than one totaliser app the summary sums them all while the column tracks
+    one, and the column is a subset.
+
+    The clamp covers an odometer reset (or a retroactive repaint away from this
+    kind) mid-period, matching period_volume_totals' per-kind clamp.
+    """
+    return max(0.0, float(cumulative) - float(baseline))
 
 
 def _sanitize(part: str) -> str:

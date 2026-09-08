@@ -322,6 +322,80 @@ def test_render_csv_header_appends_units():
     )
 
 
+# --- units cleaning ------------------------------------------------------
+#
+# Apps publish the ui_state ``units`` attribute inconsistently: a bare "%", a
+# padded " (GPH)" (already parenthesised), or "(mm)". Cleaning happens once at
+# walk time so column_header never renders "AI Value ((GPH))".
+
+UI_STATE_UNITS = {
+    "state": {
+        "children": {
+            "sensor_4_20ma_1": {
+                "type": "uiApplication",
+                "children": {
+                    "ai_value": {
+                        "type": "uiVariable",
+                        "varType": "float",
+                        "displayString": "AI Value",
+                        "units": " (GPH)",  # live shape: padded AND parenthesised
+                        "currentValue": "$tag.app().value:number:null",
+                    },
+                    "raw_ma": {
+                        "type": "uiVariable",
+                        "varType": "float",
+                        "displayString": "Raw Current",
+                        "units": "(mA)",
+                        "currentValue": "$tag.app().raw:number:null",
+                    },
+                },
+            }
+        }
+    }
+}
+
+
+def test_clean_units_strips_padding_and_one_paren_pair():
+    assert report_lib.clean_units(" (GPH)") == "GPH"
+    assert report_lib.clean_units("%") == "%"
+    assert report_lib.clean_units("(mm)") == "mm"
+    assert report_lib.clean_units("( L )") == "L"
+    assert report_lib.clean_units("L") == "L"
+
+
+def test_clean_units_blank_and_non_string():
+    assert report_lib.clean_units(None) == ""
+    assert report_lib.clean_units("  ") == ""
+    assert report_lib.clean_units("") == ""
+    assert report_lib.clean_units(5) == ""
+
+
+def test_walk_captures_cleaned_units():
+    refs = report_lib.walk_numeric_variables(UI_STATE_UNITS, "data_report_segmenter_1")
+    by_col = {r.column: r.units for r in refs}
+    assert by_col["sensor_4_20ma_1.ai_value"] == "GPH"
+    assert by_col["sensor_4_20ma_1.raw_ma"] == "mA"
+
+
+def test_column_header_does_not_double_wrap_units():
+    # Cleaned units + a bare label -> exactly one pair of parentheses.
+    refs = report_lib.walk_numeric_variables(UI_STATE_UNITS, "data_report_segmenter_1")
+    by_col = {r.column: report_lib.column_header(r) for r in refs}
+    assert by_col["sensor_4_20ma_1.ai_value"] == "AI Value (GPH)"
+    # A label that already ends with "(units)" is left alone, not suffixed twice.
+    assert (
+        report_lib.column_header(
+            VariableRef("a.x", "AI Value (GPH)", ("a", "x"), "GPH")
+        )
+        == "AI Value (GPH)"
+    )
+    # A parenthesised tail that is NOT the units still gets its unit appended.
+    assert (
+        report_lib.column_header(VariableRef("a.y", "Flow (line 2)", ("a", "y"), "L"))
+        == "Flow (line 2) (L)"
+    )
+
+
 # --- volume summary ------------------------------------------------------
 
 
@@ -565,6 +639,30 @@ def test_pipeline_total_value_absent_returns_none():
         is None
     )
     assert report_lib.pipeline_total_value({}, "skid", "A") is None
+
+
+def test_pipeline_period_value_rebases_against_baseline():
+    # Skid 9: the odometer's lifetime figures re-based against the report's
+    # baseline give the period figures the summary quotes (6.51 ... 40.11).
+    baseline = 27.10944344343592
+    assert report_lib.pipeline_period_value(33.618647713965274, baseline) == (
+        33.618647713965274 - baseline
+    )
+    assert round(report_lib.pipeline_period_value(67.21527515697971, baseline), 2) == (
+        40.11
+    )
+
+
+def test_pipeline_period_value_zero_baseline_is_passthrough():
+    # Kind absent from the baseline snapshot -> baseline 0.0 -> lifetime value.
+    assert report_lib.pipeline_period_value(46.12, 0.0) == 46.12
+    assert report_lib.pipeline_period_value(0.0, 0.0) == 0.0
+
+
+def test_pipeline_period_value_clamps_at_zero_on_reset():
+    # Odometer reset (or a retroactive repaint away from this kind) mid-period:
+    # never report a negative running total.
+    assert report_lib.pipeline_period_value(5.0, 27.1) == 0.0
 
 
 def test_render_csv_includes_pipeline_total_column():
