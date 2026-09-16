@@ -120,7 +120,8 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
 - **Variables** = walk the `ui_state` aggregate
   `state.children.<app_key>.children.*` recursively (including submodules),
   collecting nodes with `type == "uiVariable"` and `varType in ("float",
-  "integer")`. This app's own subtree is excluded.
+  "integer")`. This app's own subtree is excluded, as is any `diagnostics`
+  submodule (device-health readouts such as HMI Engine's `Restarts` counter).
 - **History** = per window, page `list_messages("ui_state", after=<start>,
   before=<end>, field_names=[...])` and extract each variable's
   `...currentValue`.
@@ -131,7 +132,9 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
     is deferred to the verification phase.
 - **CSV** (stdlib `csv`): header `Timestamp (UTC),<Segments Label>,<var
   displayString>,…` — the labels the operator reads in the widget, not machine
-  ids (column *order* and value-matching still key off the internal
+  ids. Each label is qualified by the displayStrings of the app and any
+  submodules the variable sits under (`Flow Sensor - AI Value (GPH)`), since
+  4-20mA apps all name their variable `AI Value` (column *order* and value-matching still key off the internal
   `<app_key>.<var>` reference, so duplicate display names stay data-correct).
   One row per contributing ui_state message (sparse cells blank); ascending;
   windows concatenated. Numeric values (data cells and summary) are rounded to

@@ -128,6 +128,120 @@ def test_walk_uses_displaystring_as_label_with_key_fallback():
     assert by_col["flow_sensor_1.pump_block.pressure"] == "pressure"
 
 
+# Skid-11's live shape: two 4-20mA apps whose variables are both "AI Value",
+# told apart only by the app's displayString; HMI Engine's "diagnostics"
+# submodule (excluded from reports); a variable nested in a titled submodule;
+# and an app with a blank displayString.
+UI_STATE_TITLED = {
+    "state": {
+        "children": {
+            "4_20ma_sensor_1": {
+                "type": "uiApplication",
+                "displayString": "Flow Sensor",
+                "children": {
+                    "ai_value": {
+                        "type": "uiVariable",
+                        "varType": "float",
+                        "displayString": "AI Value",
+                        "units": " (GPH)",
+                        "currentValue": "$tag.app().value:number:null",
+                    }
+                },
+            },
+            "4_20ma_sensor_2": {
+                "type": "uiApplication",
+                "displayString": "Pressure Sensor",
+                "children": {
+                    "ai_value": {
+                        "type": "uiVariable",
+                        "varType": "float",
+                        "displayString": "AI Value",
+                        "units": " (PSI)",
+                        "currentValue": "$tag.app().value:number:null",
+                    }
+                },
+            },
+            "hmi_engine_1": {
+                "type": "uiApplication",
+                "displayString": "HMI Engine",
+                "children": {
+                    "diagnostics": {
+                        "type": "uiSubmodule",
+                        "displayString": "Diagnostics",
+                        "children": {
+                            "restarts": {
+                                "type": "uiVariable",
+                                "varType": "float",
+                                "displayString": "Restarts",
+                                "currentValue": "$tag.app().restarts:number:0",
+                            }
+                        },
+                    }
+                },
+            },
+            "pump_controller_1": {
+                "type": "uiApplication",
+                "displayString": "Pump Controller",
+                "children": {
+                    "pump_1": {
+                        "type": "uiSubmodule",
+                        "displayString": "Pump 1",
+                        "children": {
+                            "stroke_rate": {
+                                "type": "uiVariable",
+                                "varType": "float",
+                                "displayString": "Stroke Rate",
+                                "currentValue": "$tag.app().stroke_rate:number:0",
+                            }
+                        },
+                    }
+                },
+            },
+            "untitled_app": {
+                "type": "uiApplication",
+                "displayString": "  ",
+                "children": {
+                    "count": {
+                        "type": "uiVariable",
+                        "varType": "integer",
+                        "currentValue": "$tag.app().count:number:0",
+                    }
+                },
+            },
+        }
+    }
+}
+
+
+def test_walk_qualifies_label_with_app_and_submodule_display_strings():
+    refs = report_lib.walk_numeric_variables(UI_STATE_TITLED, "data_report_segmenter_1")
+    by_col = {r.column: r.label for r in refs}
+    # Same variable name under two apps: the app title is what tells them apart.
+    assert by_col["4_20ma_sensor_1.ai_value"] == "Flow Sensor - AI Value"
+    assert by_col["4_20ma_sensor_2.ai_value"] == "Pressure Sensor - AI Value"
+    # Every titled ancestor on the path contributes, submodules included.
+    assert by_col["pump_controller_1.pump_1.stroke_rate"] == (
+        "Pump Controller - Pump 1 - Stroke Rate"
+    )
+    # A blank app title adds nothing; the key fallback still applies.
+    assert by_col["untitled_app.count"] == "count"
+
+
+def test_walk_excludes_diagnostics_submodules():
+    refs = report_lib.walk_numeric_variables(UI_STATE_TITLED, "data_report_segmenter_1")
+    # HMI Engine's display-restart counter is device health, not process data.
+    assert not any(".diagnostics." in r.column for r in refs)
+
+
+def test_render_csv_distinguishes_same_named_variables_by_app():
+    refs = report_lib.walk_numeric_variables(UI_STATE_TITLED, "data_report_segmenter_1")
+    out = report_lib.render_csv(refs, [], segment_label="Pipeline").decode("utf-8")
+    assert out.splitlines()[0] == (
+        "Timestamp (UTC),Pipeline,Flow Sensor - AI Value (GPH),"
+        "Pressure Sensor - AI Value (PSI),Pump Controller - Pump 1 - Stroke Rate,count"
+    )
+
+
 def test_walk_captures_units_attribute():
     refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
     by_col = {r.column: r.units for r in refs}

@@ -35,6 +35,14 @@ SEGMENT_TOTALS_KEY = "segment_totals_json"
 PIPELINE_TOTAL_COL = "__pipeline_total__"
 PIPELINE_TOTAL_LABEL = "Total Injected Volume"
 
+# Joins a variable's ancestor displayStrings to its own in the CSV header.
+LABEL_SEPARATOR = " - "
+
+# ui_state subtrees (by node key) never reported on: apps group device-health
+# readouts (e.g. HMI Engine's display "Restarts" counter) under a
+# "diagnostics" submodule, which is noise in a customer process report.
+EXCLUDED_SUBTREE_KEYS = frozenset({"diagnostics"})
+
 
 class VariableRef(NamedTuple):
     """A NumericVariable discovered in ui_state, resolved to its tag source.
@@ -43,8 +51,12 @@ class VariableRef(NamedTuple):
       (``<app_key>.<var...>``): it keys the extracted value map and fixes the
       CSV column *order*, but is never shown to the user.
     - ``label`` is the human CSV header — the variable's ui ``displayString``
-      (exactly what the operator reads in the widget), falling back to the
-      variable's own key when it carries no displayString.
+      (falling back to its own key when it carries none), qualified by the
+      displayStrings of the app and any submodules it sits under, joined with
+      LABEL_SEPARATOR (e.g. ``Flow Sensor - AI Value``). That is the card
+      title + row the operator reads in the widget; without the qualifier two
+      4-20mA apps both render as a bare ``AI Value``. Ancestors with a blank
+      displayString contribute nothing.
     - ``path`` is the key path into a ``tag_values`` message/aggregate where
       the value actually lives, e.g. ``("4_20ma_sensor_1", "value")``.
       ui_state carries only the *reference* ($tag...) to this location, never
@@ -110,14 +122,21 @@ def clean_units(raw) -> str:
     return units.strip()
 
 
+def _display_string(node: dict) -> str:
+    """A ui_state node's stripped ``displayString``, or ``""`` when absent/blank."""
+    display = node.get("displayString")
+    return display.strip() if isinstance(display, str) else ""
+
+
 def _walk_children(
     children: dict,
     column_prefix: str,
     context_app_key: str,
     out: list[VariableRef],
+    label_prefix: tuple[str, ...] = (),
 ) -> None:
     for name, node in children.items():
-        if not isinstance(node, dict):
+        if not isinstance(node, dict) or name in EXCLUDED_SUBTREE_KEYS:
             continue
         column = f"{column_prefix}.{name}"
         node_type = node.get("type")
@@ -128,12 +147,11 @@ def _walk_children(
             path = parse_tag_ref(node.get("currentValue"), context_app_key)
             if path is not None:
                 # The header is the variable's human displayString (what the
-                # operator sees in the widget); fall back to its key if unset.
-                display = node.get("displayString")
-                label = (
-                    display.strip()
-                    if isinstance(display, str) and display.strip()
-                    else name
+                # operator sees in the widget; its key if unset), qualified by
+                # the app/submodule it sits under — a bare "AI Value" can't say
+                # whether it is the flow or the pressure sensor.
+                label = LABEL_SEPARATOR.join(
+                    (*label_prefix, _display_string(node) or name)
                 )
                 # Units (if any) sit alongside displayString in ui_state; the
                 # header appends them via column_header. Normalised by
@@ -147,7 +165,14 @@ def _walk_children(
         # app() still resolves to the owning application, so context is stable.
         grandchildren = node.get("children")
         if isinstance(grandchildren, dict) and grandchildren:
-            _walk_children(grandchildren, column, context_app_key, out)
+            display = _display_string(node)
+            _walk_children(
+                grandchildren,
+                column,
+                context_app_key,
+                out,
+                (*label_prefix, display) if display else label_prefix,
+            )
 
 
 def walk_numeric_variables(
@@ -158,7 +183,8 @@ def walk_numeric_variables(
     Walks ``state.children.<app_key>.children.*`` recursively (into
     submodules) and collects nodes with ``type == "uiVariable"`` and
     ``varType in ("float", "integer")``. The app's own ``own_app_key``
-    subtree is skipped so the report never reports on itself.
+    subtree is skipped so the report never reports on itself, as is any
+    ``diagnostics`` submodule (see EXCLUDED_SUBTREE_KEYS).
     """
     out: list[VariableRef] = []
     state = ui_state_aggregate.get("state")
@@ -176,11 +202,13 @@ def walk_numeric_variables(
         children = app_node.get("children")
         if not isinstance(children, dict):
             continue
+        app_display = _display_string(app_node)
         _walk_children(
             children,
             column_prefix=app_key,
             context_app_key=app_key,
             out=out,
+            label_prefix=(app_display,) if app_display else (),
         )
 
     # Stable ordering by column name for deterministic CSV headers.
@@ -311,7 +339,7 @@ def render_csv(
     Time-series headers are the labels the operator reads in the widget, not
     machine ids: ``Timestamp (UTC),<segment_label>,<var label>,...``, where each
     data-column header is a variable's ``VariableRef.label`` (its ui
-    displayString), suffixed with ``(units)`` when it carries units (see
+    displayString, qualified by its app/submodule displayStrings), suffixed with ``(units)`` when it carries units (see
     column_header), and ``segment_label`` is the app's configured Segments Label.
     Column *order* and value matching still key off ``VariableRef.column``
     internally, so duplicate display names stay data-correct (only the header
