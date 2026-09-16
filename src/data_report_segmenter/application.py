@@ -145,6 +145,20 @@ class DataReportSegmenterApp(Application):
     def _segment_kinds(self) -> list[str]:
         return [e.value for e in self.config.segment_kinds.elements]
 
+    def _device_name(self) -> str:
+        """This device's display name (e.g. "Solar Skid 11"), for report filenames.
+
+        The deployer lists the processor's own device in the install's
+        DEVICE_MAP; falls back to APP_NAME when it is absent.
+        """
+        deployment = self.received_deployment_config or {}
+        device = (deployment.get("DEVICE_MAP") or {}).get(str(self.agent_id)) or {}
+        for key in ("display_name", "name"):
+            value = device.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return APP_NAME
+
     def _valid_kinds(self) -> set[str]:
         return seg.valid_kinds(self._segment_kinds())
 
@@ -437,7 +451,10 @@ class DataReportSegmenterApp(Application):
                 summary=summary,
             )
             filename = report_lib.build_report_filename(
-                APP_NAME, kind, start_ts, end_ts
+                self._device_name(),
+                start_ts,
+                end_ts,
+                report_lib.resolve_timezone(params.get("tz")),
             )
             csv_file = File(
                 filename=filename,

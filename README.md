@@ -103,7 +103,9 @@ Request `{"kind": "<str>", "client_ts": <ms|null>}`.
 - Response: `{"current_segment": {...}}`.
 
 ### `generate_report`
-Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
+Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>, "tz": "<IANA zone>"}`
+(`tz` optional: the operator's browser zone, used only for the filename's
+dates; omitted or unknown -> UTC).
 
 - Creates the job message on `segment_reports` **first**, then generates, then
   updates the job to a terminal status.
@@ -139,7 +141,10 @@ Request `{"kind": "<str>", "start_ts": <ms>, "end_ts": <ms>}`.
   One row per contributing ui_state message (sparse cells blank); ascending;
   windows concatenated. Numeric values (data cells and summary) are rounded to
   2 decimal places. Filename
-  `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised.
+  `{device display name}_{YYYY-MM-DD}_to_{YYYY-MM-DD}.csv`, sanitised (e.g.
+  `Solar_Skid_11_2026-09-10_to_2026-09-10.csv`). The device name comes from the
+  install's `DEVICE_MAP` (falling back to the app name); the dates are the
+  report bounds in the request's `tz`.
 - **Pipeline-scoped total column**: when the totaliser convention is present
   (an app publishing `total_volume` + `segment_totals_json`), the grand
   `total_volume` column is replaced by a **`Total Injected Volume`** column — a

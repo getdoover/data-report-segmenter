@@ -815,25 +815,40 @@ def test_build_report_filename_basic():
     # 2026-01-01T00:00:00Z .. 2026-01-03T00:00:00Z
     start = 1767225600000
     end = 1767398400000
-    name = report_lib.build_report_filename(
-        "data_report_segmenter", "Pipeline A", start, end
+    name = report_lib.build_report_filename("Solar Skid 11", start, end)
+    assert name == "Solar_Skid_11_2026-01-01_to_2026-01-03.csv"
+
+
+def test_build_report_filename_sanitises_device_name():
+    start = 1767225600000
+    name = report_lib.build_report_filename("Skid #9/B: weird*", start, start)
+    assert name == "Skid_9_B_weird_2026-01-01_to_2026-01-01.csv"
+
+
+def test_build_report_filename_empty_device_name_falls_back():
+    start = 1767225600000
+    name = report_lib.build_report_filename("!!!", start, start)
+    assert name == "unnamed_2026-01-01_to_2026-01-01.csv"
+
+
+def test_build_report_filename_uses_operator_timezone_dates():
+    # Local midnight 10 Sep .. 23:59 10 Sep in Riyadh (UTC+3) starts on 9 Sep
+    # in UTC; the filename must carry the dates the operator picked.
+    start = 1788987600000  # 2026-09-09T21:00:00Z == 2026-09-10T00:00 +03:00
+    end = 1789073940000  # 2026-09-10T20:59:00Z == 2026-09-10T23:59 +03:00
+    assert report_lib.build_report_filename("Skid 9", start, end) == (
+        "Skid_9_2026-09-09_to_2026-09-10.csv"
     )
-    assert name == "data_report_segmenter_Pipeline_A_20260101-20260103.csv"
+    riyadh = report_lib.resolve_timezone("Asia/Riyadh")
+    assert report_lib.build_report_filename("Skid 9", start, end, riyadh) == (
+        "Skid_9_2026-09-10_to_2026-09-10.csv"
+    )
 
 
-def test_build_report_filename_sanitises_kind():
-    start = 1767225600000
-    end = 1767225600000
-    name = report_lib.build_report_filename("app", "A/B: weird*name", start, end)
-    assert "/" not in name and ":" not in name and "*" not in name
-    assert name.startswith("app_A_B_weird_name_")
-
-
-def test_build_report_filename_empty_kind_falls_back():
-    start = 1767225600000
-    end = 1767225600000
-    name = report_lib.build_report_filename("app", "!!!", start, end)
-    assert "app_unnamed_" in name
+def test_resolve_timezone_falls_back_to_utc():
+    assert str(report_lib.resolve_timezone("Asia/Riyadh")) == "Asia/Riyadh"
+    for bad in (None, "", "Not/AZone", "../etc/passwd", 42):
+        assert report_lib.resolve_timezone(bad) is timezone.utc
 
 
 def test_format_timestamp_utc():

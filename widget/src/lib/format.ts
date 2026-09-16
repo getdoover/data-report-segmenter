@@ -1,8 +1,8 @@
 /**
  * Date/label formatting helpers — all pure and unit-tested.
  *
- *  - reportFilename: mirrors the processor's `{app_name}_{kind}_{YYYYMMDD}-
- *    {YYYYMMDD}.csv` (UTC) so the widget's fallback filename matches.
+ *  - reportFilename: mirrors the processor's `{device}_{YYYY-MM-DD}_to_
+ *    {YYYY-MM-DD}.csv` (local dates) for the widget's fallback filename.
  *  - datetime-local <input> value <-> epoch-ms conversion (local wall time).
  *  - defaultReportRange: last 7 days.
  *  - formatRelativeSince / formatAbsolute: the subtle "since ..." on the header.
@@ -23,24 +23,21 @@ export function sanitizeSegment(value: string): string {
   return cleaned === "" ? "none" : cleaned;
 }
 
-/** UTC YYYYMMDD for a filename date part. */
-export function yyyymmddUtc(ms: number): string {
+/** LOCAL YYYY-MM-DD for a filename date part. */
+export function isoDateLocal(ms: number): string {
   const d = new Date(ms);
-  return `${d.getUTCFullYear()}${pad2(d.getUTCMonth() + 1)}${pad2(
-    d.getUTCDate(),
-  )}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** `{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv`, sanitised. */
+/** `{name}_{YYYY-MM-DD}_to_{YYYY-MM-DD}.csv` (local dates), sanitised. */
 export function reportFilename(
-  appName: string,
-  kind: string,
+  name: string,
   startTs: number,
   endTs: number,
 ): string {
-  return `${sanitizeSegment(appName)}_${sanitizeSegment(kind)}_${yyyymmddUtc(
-    startTs,
-  )}-${yyyymmddUtc(endTs)}.csv`;
+  return `${sanitizeSegment(name)}_${isoDateLocal(startTs)}_to_${isoDateLocal(
+    endTs,
+  )}.csv`;
 }
 
 /** epoch-ms -> "YYYY-MM-DDTHH:mm" in LOCAL wall time for a datetime-local input. */

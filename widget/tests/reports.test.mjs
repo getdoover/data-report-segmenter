@@ -88,12 +88,16 @@ test("reportDownload prefers attachment filename, else derives", () => {
   const noName = reportMsg(
     "b",
     1,
-    { ...base, start_ts: Date.UTC(2026, 6, 8), end_ts: Date.UTC(2026, 6, 15) },
+    {
+      ...base,
+      start_ts: new Date(2026, 6, 8, 0, 0).getTime(),
+      end_ts: new Date(2026, 6, 15, 23, 59).getTime(),
+    },
     [{ url: "https://s3/y" }],
   );
   assert.equal(
     reportDownload(noName).filename,
-    "data_report_segmenter_A_20260708-20260715.csv",
+    "data_report_segmenter_2026-07-08_to_2026-07-15.csv",
   );
 });
 

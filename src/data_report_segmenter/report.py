@@ -13,8 +13,9 @@ import csv
 import io
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from typing import NamedTuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 NUMERIC_VAR_TYPES = ("float", "integer")
 _TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
@@ -606,11 +607,33 @@ def _sanitize(part: str) -> str:
     return cleaned or "unnamed"
 
 
-def build_report_filename(app_name: str, kind: str, start_ts: int, end_ts: int) -> str:
-    """``{app_name}_{kind}_{YYYYMMDD}-{YYYYMMDD}.csv``, sanitised."""
-    start = datetime.fromtimestamp(start_ts / 1000.0, tz=timezone.utc)
-    end = datetime.fromtimestamp(end_ts / 1000.0, tz=timezone.utc)
+def resolve_timezone(name) -> tzinfo:
+    """The IANA zone ``name`` (the operator's browser zone), else UTC.
+
+    The widget picks report bounds in local wall time, so the filename's dates
+    must be rendered in that same zone: for a UTC+3 operator a report starting
+    at local midnight begins the previous day in UTC. Missing, malformed or
+    unknown names fall back to UTC.
+    """
+    if isinstance(name, str) and name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            pass
+    return timezone.utc
+
+
+def build_report_filename(
+    device_name: str, start_ts: int, end_ts: int, tz: tzinfo = timezone.utc
+) -> str:
+    """``{device_name}_{YYYY-MM-DD}_to_{YYYY-MM-DD}.csv``, sanitised.
+
+    ``device_name`` is the skid's display name (e.g. ``Solar Skid 11``); the
+    dates are the report bounds rendered in ``tz`` (see resolve_timezone).
+    """
+    start = datetime.fromtimestamp(start_ts / 1000.0, tz=tz)
+    end = datetime.fromtimestamp(end_ts / 1000.0, tz=tz)
     return (
-        f"{_sanitize(app_name)}_{_sanitize(kind)}_"
-        f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}.csv"
+        f"{_sanitize(device_name)}_"
+        f"{start.strftime('%Y-%m-%d')}_to_{end.strftime('%Y-%m-%d')}.csv"
     )

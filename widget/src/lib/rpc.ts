@@ -22,13 +22,34 @@ export function buildSwitchRequest(
   return { kind, client_ts: now };
 }
 
-/** `generate_report` request over [startTs, endTs] (both epoch ms). */
+/** The browser's IANA time zone (e.g. "Asia/Riyadh"), or undefined. */
+export function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `generate_report` request over [startTs, endTs] (both epoch ms). `tz` names
+ * the zone the range was picked in, for the report filename's dates.
+ */
 export function buildReportRequest(
   kind: string,
   startTs: number,
   endTs: number,
+  tz: string | null = browserTimeZone() ?? null,
 ): GenerateReportRequest {
-  return { kind, start_ts: startTs, end_ts: endTs };
+  const request: GenerateReportRequest = {
+    kind,
+    start_ts: startTs,
+    end_ts: endTs,
+  };
+  if (tz) {
+    request.tz = tz;
+  }
+  return request;
 }
 
 /** `add_segment` request: paint [startTs, endTs] as `kind` (both epoch ms). */

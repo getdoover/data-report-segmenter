@@ -193,10 +193,8 @@ export function reportDownload(msg: ReportMessage): ReportDownload | null {
   }
   const d = msg.data;
   const derived =
-    typeof d.kind === "string" &&
-    typeof d.start_ts === "number" &&
-    typeof d.end_ts === "number"
-      ? reportFilename(APP_NAME, d.kind, d.start_ts, d.end_ts)
+    typeof d.start_ts === "number" && typeof d.end_ts === "number"
+      ? reportFilename(APP_NAME, d.start_ts, d.end_ts)
       : `${sanitizeSegment(APP_NAME)}_report.csv`;
   return {
     url: att.url,

@@ -24,12 +24,26 @@ test("buildSwitchRequest defaults client_ts to now", () => {
   assert.ok(req.client_ts >= before && req.client_ts <= Date.now());
 });
 
-test("buildReportRequest carries kind + range", () => {
-  assert.deepEqual(buildReportRequest("A", 1000, 2000), {
+test("buildReportRequest carries kind + range + time zone", () => {
+  assert.deepEqual(buildReportRequest("A", 1000, 2000, "Asia/Riyadh"), {
+    kind: "A",
+    start_ts: 1000,
+    end_ts: 2000,
+    tz: "Asia/Riyadh",
+  });
+  // No zone available -> field omitted (processor falls back to UTC).
+  assert.deepEqual(buildReportRequest("A", 1000, 2000, null), {
     kind: "A",
     start_ts: 1000,
     end_ts: 2000,
   });
+});
+
+test("buildReportRequest defaults to the browser time zone", () => {
+  assert.equal(
+    buildReportRequest("A", 1000, 2000).tz,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
 });
 
 test("errorMessage handles Error, string, nested pydoover status", () => {

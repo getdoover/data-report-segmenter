@@ -811,3 +811,34 @@ async def test_second_totaliser_app_sums_into_summary_only():
     # The column is skid 1's contribution alone.
     assert [round(v, 2) for v in column] == [6.51, 40.11]
     assert column[-1] < period_total
+
+
+# --- report filename device name -------------------------------------------
+
+
+def test_device_name_comes_from_own_device_map_entry():
+    app = _make_app()
+    app.agent_id = 162752502318562052
+    app.received_deployment_config = {
+        "DEVICE_MAP": {
+            "162752502318562052": {
+                "display_name": "Solar Skid 11",
+                "name": "doovit-a0418e",
+            }
+        }
+    }
+    assert app._device_name() == "Solar Skid 11"
+
+    # Blank display name -> the device's machine name.
+    app.received_deployment_config["DEVICE_MAP"]["162752502318562052"][
+        "display_name"
+    ] = " "
+    assert app._device_name() == "doovit-a0418e"
+
+
+def test_device_name_falls_back_to_app_name():
+    app = _make_app()
+    app.agent_id = 1
+    assert app._device_name() == "data_report_segmenter"  # no deployment config
+    app.received_deployment_config = {"DEVICE_MAP": {"2": {"display_name": "X"}}}
+    assert app._device_name() == "data_report_segmenter"  # not our device

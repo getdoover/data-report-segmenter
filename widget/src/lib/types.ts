@@ -71,6 +71,12 @@ export interface GenerateReportRequest {
   start_ts: number;
   /** epoch ms */
   end_ts: number;
+  /**
+   * The operator's IANA time zone (e.g. "Asia/Riyadh"). The processor renders
+   * the report filename's dates in it, so they match the local dates picked;
+   * omitted -> UTC.
+   */
+  tz?: string;
 }
 
 /** `add_segment` RPC request body (retroactive segment add). */

@@ -14,7 +14,7 @@ import {
   reportFilename,
   sanitizeSegment,
   toDatetimeLocalValue,
-  yyyymmddUtc,
+  isoDateLocal,
 } from "../src/lib/format.ts";
 
 test("sanitizeSegment keeps safe chars, collapses the rest", () => {
@@ -23,19 +23,17 @@ test("sanitizeSegment keeps safe chars, collapses the rest", () => {
   assert.equal(sanitizeSegment("///"), "none");
 });
 
-test("yyyymmddUtc formats UTC date", () => {
-  // 2026-07-15T00:00:00Z
-  assert.equal(yyyymmddUtc(Date.UTC(2026, 6, 15)), "20260715");
+test("isoDateLocal formats the local date", () => {
+  assert.equal(isoDateLocal(new Date(2026, 6, 15, 23, 30).getTime()), "2026-07-15");
 });
 
 test("reportFilename matches processor pattern", () => {
   const fn = reportFilename(
-    "data_report_segmenter",
-    "Pipeline A",
-    Date.UTC(2026, 6, 8),
-    Date.UTC(2026, 6, 15),
+    "Solar Skid 11",
+    new Date(2026, 6, 8, 0, 0).getTime(),
+    new Date(2026, 6, 15, 23, 59).getTime(),
   );
-  assert.equal(fn, "data_report_segmenter_Pipeline_A_20260708-20260715.csv");
+  assert.equal(fn, "Solar_Skid_11_2026-07-08_to_2026-07-15.csv");
 });
 
 test("datetime-local round-trips through local wall time", () => {
