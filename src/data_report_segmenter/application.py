@@ -52,6 +52,13 @@ _CROSS_SCAN_GROWTH = 4
 # with sparse totaliser history instead of walking to the beginning of time.
 _TOTALS_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
 
+# State-column seed lookback: how far before a window start to page tag_values
+# for each state variable's last logged value (a pump left off for weeks logs
+# nothing in between, so this is deliberately much longer than the totals
+# cap). Bounded so a device that never logged the tag does not walk history
+# to the beginning of time; a variable not found within it starts blank.
+_STATE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
+
 # One endpoint snapshot of a totaliser app: (grand_or_None, {kind: cumulative}).
 # See report.totals_snapshot_from_block.
 Snapshot = tuple[float | None, dict[str, float]]
@@ -792,11 +799,12 @@ class DataReportSegmenterApp(Application):
         closed_segments = await self._fetch_closed_segments(start_ts, end_ts)
         windows = seg.compute_windows(closed_segments, current, kind, start_ts, end_ts)
 
-        # ui_state tells us WHICH numeric variables to report; each carries a
-        # $tag reference that walk_numeric_variables resolves to the
+        # ui_state tells us WHICH variables to report (numeric AND state-like);
+        # each carries a $tag reference that walk_variables resolves to the
         # tag_values location holding the actual value history.
         ui_state = await self.api.fetch_channel_aggregate(UI_STATE_CHANNEL)
-        var_refs = report_lib.walk_numeric_variables(ui_state.data or {}, self.app_key)
+        var_refs = report_lib.walk_variables(ui_state.data or {}, self.app_key)
+        state_refs = [r for r in var_refs if r.kind == report_lib.STATE_KIND]
 
         # In a per-pipeline report the grand-total (all-pipelines) total_volume
         # column is swapped for a running total scoped to THIS report's kind,
@@ -875,6 +883,13 @@ class DataReportSegmenterApp(Application):
                 )
                 if closing is not None:
                     win_rows.append(closing)
+            # State columns (pump running, mode strings) persist between
+            # changes: fill every row of the window with the last known value,
+            # seeded from the value each variable last logged before the
+            # window opened so the first rows are not blank either.
+            if state_refs and win_rows:
+                seed = await self._state_seed(win_start, state_refs)
+                report_lib.forward_fill_state(win_rows, state_refs, seed)
             rows.extend(win_rows)
 
         report_refs = list(var_refs)
@@ -888,6 +903,56 @@ class DataReportSegmenterApp(Application):
                 )
             )
         return windows, rows, report_refs
+
+    async def _state_seed(
+        self, at_ts, state_refs: list[report_lib.VariableRef]
+    ) -> dict[str, object]:
+        """Each state variable's last logged value at/before ``at_ts``.
+
+        Backward-pages tag_values (newest-first, one scan per source app key,
+        ``field_names`` filtered to it) within _STATE_LOOKBACK_MS and keeps
+        the FIRST bool/str value seen per column — i.e. the most recent — so
+        forward_fill_state can carry it into a window whose own messages never
+        mention the variable (a pump that stayed off all day). Stops paging an
+        app as soon as all its columns are found. Returns ``{column: value}``;
+        a column not logged within the lookback is simply absent.
+        """
+        by_app: dict[str, list[report_lib.VariableRef]] = {}
+        for ref in state_refs:
+            if ref.path:
+                by_app.setdefault(ref.path[0], []).append(ref)
+        floor_dt = report_lib.ms_to_datetime(at_ts - _STATE_LOOKBACK_MS)
+        seed: dict[str, object] = {}
+        for app_key, refs in by_app.items():
+            pending = {ref.column: ref for ref in refs}
+            before_bound: datetime | int = report_lib.ms_to_datetime(at_ts)
+            cursor_id: int | None = None
+            while pending:
+                msgs = await self.api.list_messages(
+                    TAG_VALUES_CHANNEL,
+                    before=before_bound,
+                    after=floor_dt,
+                    limit=_PAGE_LIMIT,
+                    field_names=[app_key],
+                )
+                if not msgs:
+                    break
+                for m in sorted(msgs, key=lambda msg: msg.id, reverse=True):
+                    found = report_lib.extract_row_values(
+                        m.data or {}, list(pending.values())
+                    )
+                    for col, value in found.items():
+                        seed[col] = value
+                        pending.pop(col, None)
+                    if not pending:
+                        break
+                cursor_id = report_lib.next_page_cursor(
+                    [m.id for m in msgs], cursor_id, _PAGE_LIMIT
+                )
+                if cursor_id is None:
+                    break
+                before_bound = cursor_id
+        return seed
 
     async def _fetch_closed_segments(self, start_ts, end_ts) -> list[dict]:
         """All closed-segment records overlapping [start_ts, end_ts].

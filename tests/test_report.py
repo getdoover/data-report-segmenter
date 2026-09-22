@@ -12,8 +12,10 @@ from data_report_segmenter.report import VariableRef
 #   {"state": {"children": {<app_key>: {"children": {<var>: {...}}}}}}
 # - "flow_sensor_1" has a top-level numeric var + a nested submodule var
 #   (app() resolves to the owning app even inside the submodule)
-# - "level_sensor_1" has an integer var, a text (non-numeric) var, and a var
-#   whose currentValue is a LITERAL (no $tag ref -> nothing to follow -> skip)
+# - "level_sensor_1" has an integer var, a string (state) var, a bool (state)
+#   var, and a var whose currentValue is a LITERAL (no $tag ref -> nothing to
+#   follow -> skip)
+# - "hmi_engine_1" is display plumbing (EXCLUDED_APP_KEY_PREFIXES) -> skipped
 # - "data_report_segmenter_1" is our OWN subtree and must be excluded
 UI_STATE = {
     "state": {
@@ -52,14 +54,33 @@ UI_STATE = {
                     },
                     "status_text": {
                         "type": "uiVariable",
-                        "varType": "text",
+                        "varType": "string",
+                        "displayString": "Status",
                         "currentValue": "$tag.app().status:string:OK",
+                    },
+                    "pump_running": {
+                        "type": "uiVariable",
+                        "varType": "bool",
+                        "displayString": "Pump Running",
+                        "currentValue": "$tag.app().running:boolean:false",
                     },
                     "literal_value": {
                         "type": "uiVariable",
                         "varType": "float",
                         "currentValue": 42.0,
                     },
+                },
+            },
+            "hmi_engine_1": {
+                "type": "uiApplication",
+                "displayString": "HMI Engine",
+                "children": {
+                    "mode": {
+                        "type": "uiVariable",
+                        "varType": "string",
+                        "displayString": "Mode",
+                        "currentValue": "$tag.app().mode:string:null",
+                    }
                 },
             },
             "data_report_segmenter_1": {
@@ -80,37 +101,53 @@ UI_STATE = {
 # A tag_values message (per-change diff) carrying the referenced tags.
 TAG_MSG = {
     "flow_sensor_1": {"value": 12.5, "pressure": 3.2},
-    "level_sensor_1": {"count": 7},
+    "level_sensor_1": {"count": 7, "status": "OK", "running": True},
 }
 
 
 # --- variable-tree walk --------------------------------------------------
 
 
-def test_walk_collects_numeric_vars_including_submodule():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+def test_walk_collects_numeric_and_state_vars_including_submodule():
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     cols = [r.column for r in refs]
-    # float + integer vars with a $tag ref, including the nested submodule
-    # var; sorted by column. Literal-valued and text vars are excluded.
+    # float/integer AND bool/string vars with a $tag ref, including the nested
+    # submodule var; sorted by column. Literal-valued vars are excluded.
     assert cols == [
         "flow_sensor_1.flow_rate",
         "flow_sensor_1.pump_block.pressure",
         "level_sensor_1.level_count",
+        "level_sensor_1.pump_running",
+        "level_sensor_1.status_text",
     ]
 
 
+def test_walk_tags_each_ref_with_its_kind():
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
+    kinds = {r.column: r.kind for r in refs}
+    assert kinds["flow_sensor_1.flow_rate"] == report_lib.NUMERIC_KIND
+    assert kinds["level_sensor_1.level_count"] == report_lib.NUMERIC_KIND
+    assert kinds["level_sensor_1.pump_running"] == report_lib.STATE_KIND
+    assert kinds["level_sensor_1.status_text"] == report_lib.STATE_KIND
+    # A ref built without a kind (older callers / synthetic columns) is numeric.
+    assert VariableRef("a.b", "B", ("a", "b")).kind == report_lib.NUMERIC_KIND
+
+
 def test_walk_excludes_own_subtree():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     assert all(not r.column.startswith("data_report_segmenter_1") for r in refs)
 
 
-def test_walk_excludes_text_vars():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
-    assert "level_sensor_1.status_text" not in [r.column for r in refs]
+def test_walk_excludes_hmi_engine_app():
+    # HMI Engine's mode/renderer/url strings are display plumbing, not process
+    # data: the whole app is skipped by key prefix.
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
+    assert not any(r.column.startswith("hmi_engine_1") for r in refs)
+    assert "hmi_engine" in report_lib.EXCLUDED_APP_KEY_PREFIXES
 
 
 def test_walk_resolves_tag_paths():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     by_col = {r.column: r.path for r in refs}
     # app() resolved to the owning app, even inside the submodule.
     assert by_col["flow_sensor_1.flow_rate"] == ("flow_sensor_1", "value")
@@ -119,7 +156,7 @@ def test_walk_resolves_tag_paths():
 
 
 def test_walk_uses_displaystring_as_label_with_key_fallback():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     by_col = {r.column: r.label for r in refs}
     # The header is the human displayString the operator reads in the widget...
     assert by_col["flow_sensor_1.flow_rate"] == "Flow Rate"
@@ -214,7 +251,7 @@ UI_STATE_TITLED = {
 
 
 def test_walk_qualifies_label_with_app_and_submodule_display_strings():
-    refs = report_lib.walk_numeric_variables(UI_STATE_TITLED, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE_TITLED, "data_report_segmenter_1")
     by_col = {r.column: r.label for r in refs}
     # Same variable name under two apps: the app title is what tells them apart.
     assert by_col["4_20ma_sensor_1.ai_value"] == "Flow Sensor - AI Value"
@@ -228,13 +265,13 @@ def test_walk_qualifies_label_with_app_and_submodule_display_strings():
 
 
 def test_walk_excludes_diagnostics_submodules():
-    refs = report_lib.walk_numeric_variables(UI_STATE_TITLED, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE_TITLED, "data_report_segmenter_1")
     # HMI Engine's display-restart counter is device health, not process data.
     assert not any(".diagnostics." in r.column for r in refs)
 
 
 def test_render_csv_distinguishes_same_named_variables_by_app():
-    refs = report_lib.walk_numeric_variables(UI_STATE_TITLED, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE_TITLED, "data_report_segmenter_1")
     out = report_lib.render_csv(refs, [], segment_label="Pipeline").decode("utf-8")
     assert out.splitlines()[0] == (
         "Timestamp (UTC),Pipeline,Flow Sensor - AI Value (GPH),"
@@ -243,7 +280,7 @@ def test_render_csv_distinguishes_same_named_variables_by_app():
 
 
 def test_walk_captures_units_attribute():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     by_col = {r.column: r.units for r in refs}
     # units come straight from the ui_state node when present...
     assert by_col["level_sensor_1.level_count"] == "%"
@@ -256,13 +293,13 @@ def test_walk_captures_units_attribute():
 def test_walk_skips_literal_currentvalue():
     # A numeric var whose currentValue is a literal (not a $tag ref) has no
     # tag history to follow -> excluded (tag-reference-native).
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     assert "level_sensor_1.literal_value" not in [r.column for r in refs]
 
 
 def test_walk_empty_state():
-    assert report_lib.walk_numeric_variables({}, "x") == []
-    assert report_lib.walk_numeric_variables({"state": {}}, "x") == []
+    assert report_lib.walk_variables({}, "x") == []
+    assert report_lib.walk_variables({"state": {}}, "x") == []
 
 
 # --- tag reference resolution --------------------------------------------
@@ -315,19 +352,135 @@ def test_is_numeric():
 
 
 def test_extract_row_values_from_tag_message():
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     values = report_lib.extract_row_values(TAG_MSG, refs)
     assert values == {
         "flow_sensor_1.flow_rate": 12.5,
         "flow_sensor_1.pump_block.pressure": 3.2,
         "level_sensor_1.level_count": 7,
+        "level_sensor_1.pump_running": True,
+        "level_sensor_1.status_text": "OK",
     }
+
+
+def test_extract_row_values_type_checks_per_kind():
+    # A numeric ref ignores a bool/str payload; a state ref ignores a number
+    # and None (a cleared tag is "unknown", never a state).
+    num = VariableRef("a.n", "N", ("a", "n"))
+    state = VariableRef("a.s", "S", ("a", "s"), kind=report_lib.STATE_KIND)
+    assert report_lib.extract_row_values({"a": {"n": True, "s": 5}}, [num, state]) == {}
+    assert (
+        report_lib.extract_row_values({"a": {"n": "1", "s": None}}, [num, state]) == {}
+    )
+    assert report_lib.extract_row_values({"a": {"n": 1, "s": False}}, [num, state]) == {
+        "a.n": 1,
+        "a.s": False,
+    }
+
+
+def test_is_state_value():
+    assert report_lib.is_state_value(True)
+    assert report_lib.is_state_value("Pump 1")
+    assert report_lib.is_state_value("")
+    assert not report_lib.is_state_value(1)
+    assert not report_lib.is_state_value(None)
+
+
+def test_format_cell():
+    assert report_lib.format_cell(True) == "On"
+    assert report_lib.format_cell(False) == "Off"
+    assert report_lib.format_cell("Pump 1") == "Pump 1"
+    assert report_lib.format_cell(1.005) == "1.00"
+    assert report_lib.format_cell(None) == ""
+
+
+# --- state columns: forward fill ----------------------------------------
+
+
+def _state_refs():
+    return [
+        VariableRef("p.on", "Pump 1 Status", ("p", "on"), kind=report_lib.STATE_KIND),
+        VariableRef(
+            "p.which", "Running Pump", ("p", "which"), kind=report_lib.STATE_KIND
+        ),
+    ]
+
+
+def _row(ts: str, values: dict) -> dict:
+    return {"timestamp_utc": ts, "segment_kind": "A", "values": dict(values)}
+
+
+def test_forward_fill_state_carries_last_value_forward():
+    rows = [
+        _row("2026-01-01T00:02:00+00:00", {"x": 2}),
+        _row("2026-01-01T00:01:00+00:00", {"p.on": True, "p.which": "Pump 1"}),
+        _row("2026-01-01T00:00:00+00:00", {"x": 1}),
+        _row("2026-01-01T00:03:00+00:00", {"p.on": False}),
+        _row("2026-01-01T00:04:00+00:00", {"x": 4}),
+    ]
+    report_lib.forward_fill_state(rows, _state_refs(), seed={})
+    by_ts = {r["timestamp_utc"]: r["values"] for r in rows}
+    # Before the first change nothing is known (no seed) -> stays blank.
+    assert by_ts["2026-01-01T00:00:00+00:00"] == {"x": 1}
+    # The change row itself is untouched; later rows inherit it...
+    assert by_ts["2026-01-01T00:02:00+00:00"] == {
+        "x": 2,
+        "p.on": True,
+        "p.which": "Pump 1",
+    }
+    # ...per column: p.on flips at 00:03 while p.which keeps its last value.
+    assert by_ts["2026-01-01T00:03:00+00:00"] == {"p.on": False, "p.which": "Pump 1"}
+    assert by_ts["2026-01-01T00:04:00+00:00"] == {
+        "x": 4,
+        "p.on": False,
+        "p.which": "Pump 1",
+    }
+
+
+def test_forward_fill_state_seeds_from_pre_window_values():
+    rows = [
+        _row("2026-01-01T00:00:00+00:00", {"x": 1}),
+        _row("2026-01-01T00:01:00+00:00", {"p.on": True}),
+    ]
+    report_lib.forward_fill_state(
+        rows, _state_refs(), seed={"p.on": False, "p.which": "None"}
+    )
+    assert rows[0]["values"] == {"x": 1, "p.on": False, "p.which": "None"}
+    # An in-window change overrides the seed for that column only.
+    assert rows[1]["values"] == {"p.on": True, "p.which": "None"}
+
+
+def test_forward_fill_state_never_touches_numeric_columns_or_empty_input():
+    rows = [
+        _row("2026-01-01T00:00:00+00:00", {"x": 1}),
+        _row("2026-01-01T00:01:00+00:00", {}),
+    ]
+    report_lib.forward_fill_state(rows, _state_refs(), seed={})
+    assert rows[1]["values"] == {}  # x is numeric: not carried forward
+    assert report_lib.forward_fill_state([], _state_refs(), {"p.on": True}) == []
+    assert report_lib.forward_fill_state(rows, [], {"p.on": True}) is rows
+
+
+def test_render_csv_state_cells_render_on_off_and_text():
+    refs = [VariableRef("f.v", "Flow", ("f", "v")), *_state_refs()]
+    rows = [
+        _row(
+            "2026-01-01T00:00:00+00:00", {"f.v": 1.5, "p.on": True, "p.which": "Pump 1"}
+        ),
+        _row("2026-01-01T00:01:00+00:00", {"p.on": False, "p.which": "None"}),
+    ]
+    out = report_lib.render_csv(refs, rows, segment_label="Pipeline").decode("utf-8")
+    assert out.splitlines() == [
+        "Timestamp (UTC),Pipeline,Flow,Pump 1 Status,Running Pump",
+        "2026-01-01T00:00:00+00:00,A,1.50,On,Pump 1",
+        "2026-01-01T00:01:00+00:00,A,,Off,None",
+    ]
 
 
 def test_extract_row_values_diff_message_partial():
     # tag_values messages are per-change diffs: a message with only one app's
     # tags yields only that app's columns; the rest are absent (blank cells).
-    refs = report_lib.walk_numeric_variables(UI_STATE, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE, "data_report_segmenter_1")
     values = report_lib.extract_row_values({"level_sensor_1": {"count": 9}}, refs)
     assert values == {"level_sensor_1.level_count": 9}
 
@@ -485,7 +638,7 @@ def test_clean_units_blank_and_non_string():
 
 
 def test_walk_captures_cleaned_units():
-    refs = report_lib.walk_numeric_variables(UI_STATE_UNITS, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE_UNITS, "data_report_segmenter_1")
     by_col = {r.column: r.units for r in refs}
     assert by_col["sensor_4_20ma_1.ai_value"] == "GPH"
     assert by_col["sensor_4_20ma_1.raw_ma"] == "mA"
@@ -493,7 +646,7 @@ def test_walk_captures_cleaned_units():
 
 def test_column_header_does_not_double_wrap_units():
     # Cleaned units + a bare label -> exactly one pair of parentheses.
-    refs = report_lib.walk_numeric_variables(UI_STATE_UNITS, "data_report_segmenter_1")
+    refs = report_lib.walk_variables(UI_STATE_UNITS, "data_report_segmenter_1")
     by_col = {r.column: report_lib.column_header(r) for r in refs}
     assert by_col["sensor_4_20ma_1.ai_value"] == "AI Value (GPH)"
     # A label that already ends with "(units)" is left alone, not suffixed twice.

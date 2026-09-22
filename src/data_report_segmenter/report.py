@@ -18,6 +18,15 @@ from typing import NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 NUMERIC_VAR_TYPES = ("float", "integer")
+# State-like variables: pydoover exports a BooleanVariable as varType "bool"
+# and a TextVariable as "string" ("text" is accepted for older exports). They
+# are reported beside the numerics, but as STATE columns: a pump's running
+# flag or a controller's mode string stays true between changes, so the report
+# carries the last known value forward into every row (forward_fill_state)
+# instead of leaving the cell blank the way a numeric that did not move is.
+STATE_VAR_TYPES = ("bool", "string", "text")
+NUMERIC_KIND = "numeric"
+STATE_KIND = "state"
 _TAG_LOOKUP_TYPES = ("string", "number", "boolean", "array", "object")
 
 # Convention for the volume summary block: an upstream app (e.g. a
@@ -44,6 +53,12 @@ LABEL_SEPARATOR = " - "
 # "diagnostics" submodule, which is noise in a customer process report.
 EXCLUDED_SUBTREE_KEYS = frozenset({"diagnostics"})
 
+# Whole apps never reported on, matched by app_key prefix: HMI Engine publishes
+# its display plumbing (mode, renderer, output, URL, showing) as string/bool
+# ui variables, which would otherwise become state columns in every customer
+# process report.
+EXCLUDED_APP_KEY_PREFIXES = ("hmi_engine",)
+
 
 class VariableRef(NamedTuple):
     """A NumericVariable discovered in ui_state, resolved to its tag source.
@@ -68,12 +83,16 @@ class VariableRef(NamedTuple):
       non-empty (see column_header). Empty ``""`` when the node carries no
       units — 4-20mA columns bake their unit into ``displayString`` instead, so
       they render unchanged.
+    - ``kind`` is NUMERIC_KIND for float/integer variables (cells are numbers,
+      blank where the value did not move) or STATE_KIND for bool/string ones
+      (cells are On/Off or the text, carried forward between changes).
     """
 
     column: str
     label: str
     path: tuple[str, ...]
     units: str = ""
+    kind: str = NUMERIC_KIND
 
 
 def parse_tag_ref(ref, context_app_key: str) -> tuple[str, ...] | None:
@@ -142,7 +161,9 @@ def _walk_children(
         column = f"{column_prefix}.{name}"
         node_type = node.get("type")
         var_type = node.get("varType")
-        if node_type == "uiVariable" and var_type in NUMERIC_VAR_TYPES:
+        is_numeric_var = var_type in NUMERIC_VAR_TYPES
+        is_state_var = var_type in STATE_VAR_TYPES
+        if node_type == "uiVariable" and (is_numeric_var or is_state_var):
             # ui_state holds only the tag *reference*; resolve it to the
             # tag_values location that actually carries the value history.
             path = parse_tag_ref(node.get("currentValue"), context_app_key)
@@ -160,7 +181,13 @@ def _walk_children(
                 # absent/blank -> "".
                 units = clean_units(node.get("units"))
                 out.append(
-                    VariableRef(column=column, label=label, path=path, units=units)
+                    VariableRef(
+                        column=column,
+                        label=label,
+                        path=path,
+                        units=units,
+                        kind=STATE_KIND if is_state_var else NUMERIC_KIND,
+                    )
                 )
         # Recurse into submodules / containers regardless of this node's type;
         # app() still resolves to the owning application, so context is stable.
@@ -176,16 +203,16 @@ def _walk_children(
             )
 
 
-def walk_numeric_variables(
-    ui_state_aggregate: dict, own_app_key: str
-) -> list[VariableRef]:
-    """All NumericVariables in the ui_state aggregate, excluding our own subtree.
+def walk_variables(ui_state_aggregate: dict, own_app_key: str) -> list[VariableRef]:
+    """All reportable variables in the ui_state aggregate, excluding our own subtree.
 
     Walks ``state.children.<app_key>.children.*`` recursively (into
-    submodules) and collects nodes with ``type == "uiVariable"`` and
-    ``varType in ("float", "integer")``. The app's own ``own_app_key``
-    subtree is skipped so the report never reports on itself, as is any
-    ``diagnostics`` submodule (see EXCLUDED_SUBTREE_KEYS).
+    submodules) and collects nodes with ``type == "uiVariable"`` whose
+    ``varType`` is numeric (NUMERIC_VAR_TYPES) or state-like
+    (STATE_VAR_TYPES); each ref's ``kind`` says which. The app's own
+    ``own_app_key`` subtree is skipped so the report never reports on itself,
+    as is any ``diagnostics`` submodule (EXCLUDED_SUBTREE_KEYS) and any app
+    whose key starts with an EXCLUDED_APP_KEY_PREFIXES entry.
     """
     out: list[VariableRef] = []
     state = ui_state_aggregate.get("state")
@@ -197,6 +224,8 @@ def walk_numeric_variables(
 
     for app_key, app_node in app_children.items():
         if app_key == own_app_key:
+            continue
+        if app_key.startswith(EXCLUDED_APP_KEY_PREFIXES):
             continue
         if not isinstance(app_node, dict):
             continue
@@ -234,23 +263,64 @@ def is_numeric(value) -> bool:
     return isinstance(value, (int, float))
 
 
+def is_state_value(value) -> bool:
+    """True for bool/str values usable as STATE_KIND report data."""
+    return isinstance(value, (bool, str))
+
+
 def extract_row_values(
     message_data: dict, var_refs: list[VariableRef]
-) -> dict[str, float]:
-    """Extract each variable's numeric value from one tag_values message.
+) -> dict[str, object]:
+    """Extract each variable's value from one tag_values message.
 
     ``message_data`` is a tag_values message payload (``{app_key: {tag:
     value}}``). tag_values messages are per-change diffs, so a message
     typically carries only the tags that moved — variables absent from this
-    message are simply left out of the row (their cell renders blank). Only
-    genuinely-numeric values are kept.
+    message are simply left out of the row (their cell renders blank, or for
+    a state column is filled from the previous row by forward_fill_state).
+    A numeric ref keeps only genuinely-numeric values; a state ref keeps only
+    bool/str values.
     """
-    values: dict[str, float] = {}
+    values: dict[str, object] = {}
     for ref in var_refs:
         raw = get_by_keys(message_data, ref.path)
-        if is_numeric(raw):
+        if ref.kind == STATE_KIND:
+            if is_state_value(raw):
+                values[ref.column] = raw
+        elif is_numeric(raw):
             values[ref.column] = raw
     return values
+
+
+def forward_fill_state(
+    rows: list[dict], state_refs: list[VariableRef], seed: dict[str, object]
+) -> list[dict]:
+    """Carry each state column's last known value into every later row.
+
+    tag_values messages are per-change diffs, so a state variable (a pump's
+    running flag, a mode string) appears in a row only at the instant it
+    changed; every other row would read blank, which for a *state* misreads
+    as "unknown" when the truth is "unchanged". This walks ``rows`` in
+    ascending timestamp order and fills each state column that a row lacks
+    with the value most recently seen — starting from ``seed``, the
+    ``{column: value}`` map of each variable's last logged value BEFORE the
+    window (see application._state_seed), so the window's first rows carry a
+    value too. A column with no seed and no in-window change stays blank
+    until its first change. Numeric columns are never filled. Mutates and
+    returns ``rows``.
+    """
+    if not state_refs or not rows:
+        return rows
+    columns = [ref.column for ref in state_refs]
+    last = {col: seed[col] for col in columns if col in seed}
+    for row in sorted(rows, key=lambda r: r["timestamp_utc"]):
+        values = row.setdefault("values", {})
+        for col in columns:
+            if col in values:
+                last[col] = values[col]
+            elif col in last:
+                values[col] = last[col]
+    return rows
 
 
 def ms_to_datetime(epoch_ms: int) -> datetime:
@@ -307,6 +377,21 @@ def _format_number(value) -> str:
     return ""
 
 
+def format_cell(value) -> str:
+    """Render one data cell: numbers to 2 dp, bools as On/Off, text verbatim.
+
+    Bools read as ``On``/``Off`` because the state variables that reach a
+    process report are equipment flags (pump running, alarm active), and
+    that is how an operator reads them off the panel. Anything else (a
+    missing cell, None) renders blank.
+    """
+    if isinstance(value, bool):
+        return "On" if value else "Off"
+    if isinstance(value, str):
+        return value
+    return _format_number(value)
+
+
 def column_header(ref: VariableRef) -> str:
     """CSV header for a variable: its label, plus ``(units)`` when it has units.
 
@@ -347,8 +432,9 @@ def render_csv(
     repeats).
 
     Each row dict is ``{"timestamp_utc": str, "segment_kind": str,
-    "values": {column: number}}``. Rows are emitted in ascending timestamp
-    order; missing cells render blank.
+    "values": {column: number | bool | str}}``. Rows are emitted in ascending
+    timestamp order; cells render via format_cell (numbers to 2 dp, bools as
+    On/Off, text verbatim) and missing cells render blank.
     """
     columns = [ref.column for ref in var_refs]
     header = [
@@ -370,7 +456,7 @@ def render_csv(
         values = row.get("values", {})
         line = [row["timestamp_utc"], row["segment_kind"]]
         for col in columns:
-            line.append(_format_number(values.get(col)))
+            line.append(format_cell(values.get(col)))
         writer.writerow(line)
 
     return buf.getvalue().encode("utf-8")

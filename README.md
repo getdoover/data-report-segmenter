@@ -121,9 +121,22 @@ dates; omitted or unknown -> UTC).
   `end_ts`). Partial overlaps are clamped; discontinuous windows are expected.
 - **Variables** = walk the `ui_state` aggregate
   `state.children.<app_key>.children.*` recursively (including submodules),
-  collecting nodes with `type == "uiVariable"` and `varType in ("float",
-  "integer")`. This app's own subtree is excluded, as is any `diagnostics`
-  submodule (device-health readouts such as HMI Engine's `Restarts` counter).
+  collecting nodes with `type == "uiVariable"` and a `varType` that is either
+  **numeric** (`float`, `integer`) or **state-like** (`bool`, `string`). This
+  app's own subtree is excluded, as is any `diagnostics` submodule
+  (device-health readouts such as HMI Engine's `Restarts` counter) and the
+  whole HMI Engine app (`hmi_engine*` — its mode/renderer/URL strings are
+  display plumbing, not process data).
+- **State columns**: a bool/string variable (a pump's running flag, the
+  running-pump name, a controller mode) renders as `On`/`Off` or the text, and
+  — unlike a numeric, which is blank wherever it did not move — is **carried
+  forward** into every row of a window from its last known value. The window
+  is seeded with the value the variable last logged before it opened (up to 30
+  days back), so the first rows read correctly too; a variable never logged in
+  that span stays blank until its first in-window change. Apps that want
+  their status in the report declare a (possibly hidden) `BooleanVariable` /
+  `TextVariable` bound to the tag and log the tag on change
+  (`log_on=tags.AnyChange()`) so transitions are timestamped exactly.
 - **History** = per window, page `list_messages("ui_state", after=<start>,
   before=<end>, field_names=[...])` and extract each variable's
   `...currentValue`.
